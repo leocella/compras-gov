@@ -4,6 +4,7 @@ const express = require('express');
 const { chromium } = require('playwright');
 const { tirarScreenshot, rasparItensPregao } = require('./comprasgov');
 const { buscarItensPregaoApi, listarContratacoesRecentes } = require('./pncp-api');
+const { salvar, listarRaspagens, DADOS_DIR }              = require('./storage');
 
 const PORT      = parseInt(process.env.PORT || '3099', 10);
 const START_URL = process.env.START_URL || 'https://www.comprasnet.gov.br';
@@ -97,19 +98,48 @@ app.post('/api/itens', async (req, res) => {
     return res.status(400).json({ erro: 'informe "sequencial" ou "numeroCompra"' });
 
   try {
+    const cnpjLimpo = String(cnpj).replace(/\D/g, '');
     const itens = await buscarItensPregaoApi({ cnpj, ano, sequencial, numeroCompra });
+
+    // Persistir em disco (JSON + CSV)
+    const meta    = { cnpj: cnpjLimpo, ano: String(ano), sequencial, numeroCompra };
+    const salvo   = salvar(meta, itens);
+    console.log(`[api/itens] Salvo: ${salvo.json}`);
+
     res.json({
       sucesso: true,
-      cnpj: String(cnpj).replace(/\D/g, ''),
+      cnpj: cnpjLimpo,
       ano: String(ano),
       sequencial: sequencial ? String(sequencial) : undefined,
       numeroCompra: numeroCompra ? String(numeroCompra) : undefined,
       totalItens: itens.length,
       itens,
       fonte: 'PNCP REST API (sem browser)',
+      arquivos: {
+        json: salvo.json,
+        csv:  salvo.csv,
+      },
     });
   } catch (err) {
     console.error('[api/itens]', err.message);
+    res.status(500).json({ sucesso: false, erro: err.message });
+  }
+});
+
+/**
+ * GET /api/raspagens
+ * Lista todos os arquivos JSON salvos em dados/.
+ */
+app.get('/api/raspagens', (req, res) => {
+  try {
+    const lista = listarRaspagens();
+    res.json({
+      sucesso: true,
+      pastaArquivos: DADOS_DIR,
+      total: lista.length,
+      raspagens: lista,
+    });
+  } catch (err) {
     res.status(500).json({ sucesso: false, erro: err.message });
   }
 });
