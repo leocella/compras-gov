@@ -1,5 +1,8 @@
 'use strict';
 
+// ---------------------------------------------------------------------------
+// Seletores — busca pública (sem login)
+// ---------------------------------------------------------------------------
 const SEL = {
   campoUasg:        'input[name*="uasg" i], input[id*="uasg" i]',
   campoNumero:      'input[name*="numero" i], input[id*="numero" i]',
@@ -13,6 +16,36 @@ const SEL = {
   colValorEstimado: 'td:nth-child(5)',
 };
 
+// ---------------------------------------------------------------------------
+// Seletores do chat de mensagens — ComprasNet legado (comprasnet.gov.br)
+// ⚠️ RECON_NEEDED: todos os valores abaixo precisam ser confirmados ao vivo
+//   via DevTools / Playwright codegen após login manual do Rafael.
+//   Procedure: POST /sessao/iniciar → logar → GET /screenshot → inspecionar HTML.
+// ---------------------------------------------------------------------------
+const SEL_MSG = {
+  // URL base do chat de mensagens do fornecedor (⚠️ confirmar após login)
+  urlChat: 'https://www.comprasnet.gov.br/livre/fornecedor/mensagem/consultarMensagemFornecedor.asp',
+
+  // Formulário de busca de mensagens
+  campoChatUasg:   'input[name="co_uasg"], input[id="co_uasg"]',         // ⚠️ RECON
+  campoChatNumero: 'input[name="numprp"], input[id="numprp"]',            // ⚠️ RECON
+  botaoChatBuscar: 'input[type="submit"][value*="Consultar"], input[type="submit"][value*="Buscar"]', // ⚠️ RECON
+
+  // Tabela de mensagens
+  linhasMensagens: 'table.tabela-resultado tbody tr, #tabelaMensagens tbody tr', // ⚠️ RECON
+  colMsgRemetente: 'td:nth-child(1)',                                     // ⚠️ RECON
+  colMsgDataHora:  'td:nth-child(2)',                                     // ⚠️ RECON
+  colMsgTexto:     'td:nth-child(3)',                                     // ⚠️ RECON
+
+  // Resposta
+  linkResponder:  'a:has-text("Responder"), input[value*="Responder"]',   // ⚠️ RECON
+  campoResposta:  'textarea[name*="msg"], textarea[name*="texto"], textarea[id*="resposta"]', // ⚠️ RECON
+  botaoEnviar:    'input[type="submit"][value*="Enviar"], button:has-text("Enviar")', // ⚠️ RECON
+};
+
+// ---------------------------------------------------------------------------
+// extrairMarcas — função pura, testável sem browser
+// ---------------------------------------------------------------------------
 function extrairMarcas(descricao) {
   const out = { marcaObrigatoria: '', marcaPreferencia: '' };
   if (!descricao || typeof descricao !== 'string') return out;
@@ -28,11 +61,17 @@ function extrairMarcas(descricao) {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// tirarScreenshot — debug visual
+// ---------------------------------------------------------------------------
 async function tirarScreenshot(page) {
   const buf = await page.screenshot({ type: 'png', fullPage: false });
   return buf.toString('base64');
 }
 
+// ---------------------------------------------------------------------------
+// rasparItensPregao — busca pública sem login (bloqueada por CAPTCHA no mobile)
+// ---------------------------------------------------------------------------
 async function rasparItensPregao(page, uasg, numeroPregao, startUrl) {
   await page.goto(startUrl, { waitUntil: 'domcontentloaded' });
 
@@ -45,10 +84,7 @@ async function rasparItensPregao(page, uasg, numeroPregao, startUrl) {
   await page.waitForLoadState('networkidle');
 
   const linhas = await page.$$eval(SEL.linhasItens, (rows, sel) => {
-    const txt = (el, q) => {
-      const n = el.querySelector(q);
-      return n ? n.textContent.trim() : '';
-    };
+    const txt = (el, q) => { const n = el.querySelector(q); return n ? n.textContent.trim() : ''; };
     const num = (s) => {
       if (!s) return null;
       const limpo = s.replace(/[^\d,.-]/g, '').replace(/\./g, '').replace(',', '.');
@@ -71,4 +107,74 @@ async function rasparItensPregao(page, uasg, numeroPregao, startUrl) {
   return { itens, url: page.url() };
 }
 
-module.exports = { extrairMarcas, tirarScreenshot, rasparItensPregao, SEL };
+// ---------------------------------------------------------------------------
+// lerMensagensChat — requer sessão logada
+// ⚠️ Seletores em SEL_MSG precisam de recon ao vivo para funcionar
+// ---------------------------------------------------------------------------
+async function lerMensagensChat(page, uasg, numeroPregao) {
+  await page.goto(SEL_MSG.urlChat, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  await page.waitForLoadState('networkidle');
+
+  if (page.url().includes('login')) {
+    throw new Error('Sessão expirada — faça login via POST /sessao/iniciar');
+  }
+
+  try {
+    await page.fill(SEL_MSG.campoChatUasg, String(uasg));
+    await page.fill(SEL_MSG.campoChatNumero, String(numeroPregao));
+    await page.click(SEL_MSG.botaoChatBuscar);
+    await page.waitForLoadState('networkidle');
+  } catch (e) {
+    throw new Error(
+      `Seletores do chat precisam de recon (⚠️). ` +
+      `Use GET /screenshot para ver o estado da página. ` +
+      `Erro: ${e.message}`
+    );
+  }
+
+  const mensagens = await page.$$eval(SEL_MSG.linhasMensagens, (rows, sel) => {
+    const txt = (el, q) => { const n = el.querySelector(q); return n ? n.textContent.trim() : ''; };
+    return rows
+      .map((r) => ({
+        remetente: txt(r, sel.colMsgRemetente),
+        dataHora:  txt(r, sel.colMsgDataHora),
+        texto:     txt(r, sel.colMsgTexto),
+      }))
+      .filter((m) => m.texto);
+  }, SEL_MSG);
+
+  return { mensagens, url: page.url(), total: mensagens.length };
+}
+
+// ---------------------------------------------------------------------------
+// responderMensagem — requer sessão logada
+// ⚠️ Seletores em SEL_MSG precisam de recon ao vivo para funcionar
+// ---------------------------------------------------------------------------
+async function responderMensagem(page, uasg, numeroPregao, texto) {
+  await lerMensagensChat(page, uasg, numeroPregao);
+
+  try {
+    await page.click(SEL_MSG.linkResponder);
+    await page.waitForLoadState('domcontentloaded');
+    await page.fill(SEL_MSG.campoResposta, texto);
+    await page.click(SEL_MSG.botaoEnviar);
+    await page.waitForLoadState('networkidle');
+    return { enviado: true, url: page.url() };
+  } catch (e) {
+    throw new Error(
+      `Erro ao responder (⚠️ seletores precisam de recon). ` +
+      `Use GET /screenshot para inspecionar. ` +
+      `Erro: ${e.message}`
+    );
+  }
+}
+
+module.exports = {
+  extrairMarcas,
+  tirarScreenshot,
+  rasparItensPregao,
+  lerMensagensChat,
+  responderMensagem,
+  SEL,
+  SEL_MSG,
+};
