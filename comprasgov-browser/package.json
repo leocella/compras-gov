@@ -1,0 +1,18 @@
+{
+  "name": "comprasgov-browser",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Servidor local que expõe API HTTP para raspar dados públicos do ComprasGov via Playwright.",
+  "main": "server.js",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test comprasgov.test.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "playwright": "^1.47.0"
+  }
+}
