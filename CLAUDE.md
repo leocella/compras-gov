@@ -94,12 +94,12 @@ O node "Preparar Dados e Prompt" lê por nome de coluna **OU** por letra (fallba
 ## PROJETO 2 — ComprasGov Automation (em desenvolvimento)
 
 Responsável: Leo (desenvolvimento) + Rafael (cliente/usuário)
-Status: **RODADA 1 IMPLEMENTADA, com pivot em curso.**
+Status: **RODADA API IMPLEMENTADA** — endpoints REST sem browser funcionando. Playwright mantido para rodada de mensagens (login).
 
 - Pasta `comprasgov-browser/` criada com server Express + Playwright (`/status`, `/screenshot`, `/pregao/itens` com mutex e validação 400/409). 8 testes unitários passando para `extrairMarcas`.
 - **Raspagem HTML descartada:** o portal `cnetmobile.estaleiro.serpro.gov.br` tem reCAPTCHA agressivo que bloqueia XHR mesmo com browser headed. Confirmado em recon (3 rodadas).
-- **Pivot ativo:** rodada 1 vai usar a API REST oficial **Dadosabertos** (`https://dadosabertos.compras.gov.br`) — endpoint `/modulo-contratacoes/2.1_consultarItensContratacoes_PNCP_14133_Id` para itens de uma compra (Lei 14.133/2021). Sem CAPTCHA, contrato estável, ~200ms por chamada.
-- **Playwright fica para a rodada 2** (mensagens com login no chat de pregão — esse caso exige browser real).
+- **Rodada API implementada:** novo módulo `pncp-api.js` acessa a API REST pública `https://pncp.gov.br/api/pncp/v1` — sem CAPTCHA, sem login, ~1s por chamada. Dois novos endpoints no servidor: `POST /api/itens` e `GET /api/contratacoes`.
+- **Playwright fica para a rodada de mensagens** (login no chat do pregão — esse caso exige browser real).
 - Spec rodada 1: `docs/superpowers/specs/2026-04-28-comprasgov-raspagem-itens-design.md`
 - Plan rodada 1: `docs/superpowers/plans/2026-04-28-comprasgov-raspagem-itens.md`
 
@@ -120,22 +120,28 @@ Referência técnica do portal: `manual-tecnico-comprasgov.docx` (na raiz).
 ### Estrutura atual (pasta `comprasgov-browser/`):
 ```
 comprasgov-browser/
-├── server.js              ← Express + ciclo de vida Chromium + endpoints
+├── server.js              ← Express + ciclo de vida Chromium + endpoints browser e API REST
 ├── comprasgov.js          ← lógica Playwright + objeto SEL + extrairMarcas
+├── pncp-api.js            ← API REST pública PNCP (sem browser, sem login) ✅ novo
+├── smoke-api.js           ← smoke test standalone para pncp-api.js
 ├── comprasgov.test.js     ← 8 testes unitários (extrairMarcas)
 ├── package.json           ← deps: express, playwright (Node 20+)
 ├── .gitignore             ← node_modules/, sessions/, *.log
 ├── package-lock.json
-└── (futuro) setup.sh + sessions/  ← rodada 3 (VPS)
+└── (futuro) setup.sh + sessions/  ← rodada mensagens (VPS)
 ```
 
 ### API do servidor (porta 3099, bind 127.0.0.1):
 ```
-GET  /status        → { online, browserPronto, url }                    ✅ implementado
-GET  /screenshot    → PNG base64 da página atual (debug)                ✅ implementado
-POST /pregao/itens  → { uasg, numeroPregao } → itens                    ⚠️ implementado, raspagem bloqueada (CAPTCHA) — pivot pra API
-POST /mensagens/ler       → (rodada 2: precisa de login)                ⏳ pendente
-POST /mensagens/responder → (rodada 2: precisa de login)                ⏳ pendente
+GET  /status        → { online, browserPronto, url }                    ✅ implementado (browser)
+GET  /screenshot    → PNG base64 da página atual (debug)                ✅ implementado (browser)
+POST /pregao/itens  → { uasg, numeroPregao } → itens via Playwright    ⚠️  bloqueado por CAPTCHA
+
+POST /api/itens     → { cnpj, ano, sequencial|numeroCompra } → itens   ✅ implementado (REST, sem browser)
+GET  /api/contratacoes → ?dataInicial&dataFinal&pagina → lista pregões  ✅ implementado (REST, sem browser)
+
+POST /mensagens/ler       → (rodada mensagens: precisa de login)        ⏳ pendente
+POST /mensagens/responder → (rodada mensagens: precisa de login)        ⏳ pendente
 ```
 
 ### Arquitetura de comunicação:

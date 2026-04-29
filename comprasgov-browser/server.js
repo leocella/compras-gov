@@ -3,6 +3,7 @@
 const express = require('express');
 const { chromium } = require('playwright');
 const { tirarScreenshot, rasparItensPregao } = require('./comprasgov');
+const { buscarItensPregaoApi, listarContratacoesRecentes } = require('./pncp-api');
 
 const PORT      = parseInt(process.env.PORT || '3099', 10);
 const START_URL = process.env.START_URL || 'https://www.comprasnet.gov.br';
@@ -77,6 +78,66 @@ app.post('/pregao/itens', async (req, res) => {
     busy = false;
   }
 });
+
+// ─── Endpoints API REST (sem browser) ──────────────────────────────────────
+
+/**
+ * POST /api/itens
+ * Body: { cnpj, ano, sequencial } OU { cnpj, ano, numeroCompra }
+ * Retorna itens de um pregão via API pública PNCP — sem Playwright, sem login.
+ * Exemplo:
+ *   { "cnpj": "90483058000126", "ano": 2026, "sequencial": 54 }
+ */
+app.post('/api/itens', async (req, res) => {
+  const { cnpj, ano, sequencial, numeroCompra } = req.body || {};
+
+  if (!cnpj)  return res.status(400).json({ erro: 'campo "cnpj" obrigatório' });
+  if (!ano)   return res.status(400).json({ erro: 'campo "ano" obrigatório' });
+  if (!sequencial && !numeroCompra)
+    return res.status(400).json({ erro: 'informe "sequencial" ou "numeroCompra"' });
+
+  try {
+    const itens = await buscarItensPregaoApi({ cnpj, ano, sequencial, numeroCompra });
+    res.json({
+      sucesso: true,
+      cnpj: String(cnpj).replace(/\D/g, ''),
+      ano: String(ano),
+      sequencial: sequencial ? String(sequencial) : undefined,
+      numeroCompra: numeroCompra ? String(numeroCompra) : undefined,
+      totalItens: itens.length,
+      itens,
+      fonte: 'PNCP REST API (sem browser)',
+    });
+  } catch (err) {
+    console.error('[api/itens]', err.message);
+    res.status(500).json({ sucesso: false, erro: err.message });
+  }
+});
+
+/**
+ * GET /api/contratacoes
+ * Query: dataInicial, dataFinal, modalidade, pagina, tamanhoPagina
+ * Lista pregões publicados no PNCP num intervalo de datas.
+ * Exemplo: GET /api/contratacoes?dataInicial=20260420&dataFinal=20260429
+ */
+app.get('/api/contratacoes', async (req, res) => {
+  const { dataInicial, dataFinal, modalidade, pagina, tamanhoPagina } = req.query;
+  try {
+    const resultado = await listarContratacoesRecentes({
+      dataInicial,
+      dataFinal,
+      modalidade: modalidade ? Number(modalidade) : 6,
+      pagina:     pagina     ? Number(pagina)     : 1,
+      tamanhoPagina: tamanhoPagina ? Number(tamanhoPagina) : 20,
+    });
+    res.json({ sucesso: true, ...resultado });
+  } catch (err) {
+    console.error('[api/contratacoes]', err.message);
+    res.status(500).json({ sucesso: false, erro: err.message });
+  }
+});
+
+// ───────────────────────────────────────────────────────────────────────────
 
 (async () => {
   await bootBrowser();
