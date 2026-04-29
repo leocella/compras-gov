@@ -1,0 +1,36 @@
+# --- Claude Code local state ---
+.claude/
+
+# --- n8n config + scripts (contain plaintext JWT/API keys) ---
+.mcp.json
+claude.json
+create_workflow.js
+create_workflow.py
+
+# --- Resultados de pregões reais (exportações manuais com dados de órgãos) ---
+Resultados_*.xlsx
+
+# --- Node ---
+node_modules/
+*.log
+
+# --- Playwright ---
+comprasgov-browser/sessions/
+
+# --- Debug artifacts (recon, screenshots one-off) ---
+recon*.js
+recon*.txt
+recon-output.txt
+pos-pesquisa.png
+tela.png
+sshot.json
+
+# --- Env ---
+.env
+.env.*
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
