@@ -6,6 +6,7 @@ const { tirarScreenshot, rasparItensPregao, lerMensagensChat, responderMensagem 
 const { buscarItensPregaoApi, listarContratacoesRecentes } = require('./pncp-api');
 const { salvar, listarRaspagens, DADOS_DIR }              = require('./storage');
 const sessao = require('./sessao');
+const da     = require('./dadosabertos-api');
 
 const PORT      = parseInt(process.env.PORT || '3099', 10);
 const START_URL = process.env.START_URL || 'https://www.comprasnet.gov.br';
@@ -173,6 +174,168 @@ app.get('/api/contratacoes', async (req, res) => {
   } catch (err) {
     console.error('[api/contratacoes]', err.message);
     res.status(500).json({ sucesso: false, erro: err.message });
+  }
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// Endpoints DADOSABERTOS (dadosabertos.compras.gov.br)
+// Cobertura: pregões legado, itens c/ vencedor, contratos, UASG, preços
+// ───────────────────────────────────────────────────────────────────────────
+
+/**
+ * GET /legado/pregoes
+ * Lista pregões do sistema legado (SIASG/ComprasNet).
+ * Query obrigatória: dt_data_edital_inicial, dt_data_edital_final (YYYY-MM-DD)
+ * Opcional: co_uasg, co_orgao, numero, pertence14133 (true/false)
+ * Exemplo: /legado/pregoes?co_uasg=150229&dt_data_edital_inicial=2026-01-01&dt_data_edital_final=2026-04-30
+ */
+app.get('/legado/pregoes', async (req, res) => {
+  try {
+    const r = await da.listarPregoes(req.query);
+    res.json({ sucesso: true, fonte: 'dadosabertos.compras.gov.br', ...r });
+  } catch (err) {
+    console.error('[legado/pregoes]', err.message);
+    res.status(err.message.includes('obrigat') ? 400 : 500).json({ sucesso: false, erro: err.message });
+  }
+});
+
+/**
+ * GET /legado/pregao
+ * Busca pregão específico por id_compra (ID interno SIASG).
+ * Query: id_compra* (obrigatório)
+ */
+app.get('/legado/pregao', async (req, res) => {
+  try {
+    const r = await da.buscarPregaoPorId(req.query);
+    res.json({ sucesso: true, fonte: 'dadosabertos.compras.gov.br', ...r });
+  } catch (err) {
+    console.error('[legado/pregao]', err.message);
+    res.status(err.message.includes('obrigat') ? 400 : 500).json({ sucesso: false, erro: err.message });
+  }
+});
+
+/**
+ * GET /legado/itens-pregao
+ * Lista itens de pregão com resultado (vencedor, valor homologado, fornecedor).
+ * Query obrigatória: dt_hom_inicial, dt_hom_final (YYYY-MM-DD)
+ * Opcional: co_uasg, fornecedor_vencedor (CNPJ), decreto_7174 (S/N)
+ * Exemplo: /legado/itens-pregao?co_uasg=150229&dt_hom_inicial=2026-01-01&dt_hom_final=2026-04-30
+ */
+app.get('/legado/itens-pregao', async (req, res) => {
+  try {
+    const r = await da.listarItensPregao(req.query);
+    res.json({ sucesso: true, fonte: 'dadosabertos.compras.gov.br', ...r });
+  } catch (err) {
+    console.error('[legado/itens-pregao]', err.message);
+    res.status(err.message.includes('obrigat') ? 400 : 500).json({ sucesso: false, erro: err.message });
+  }
+});
+
+/**
+ * GET /legado/item-pregao
+ * Busca item específico por id_compra e (opcional) id_compra_item.
+ */
+app.get('/legado/item-pregao', async (req, res) => {
+  try {
+    const r = await da.buscarItemPregaoPorId(req.query);
+    res.json({ sucesso: true, fonte: 'dadosabertos.compras.gov.br', ...r });
+  } catch (err) {
+    console.error('[legado/item-pregao]', err.message);
+    res.status(err.message.includes('obrigat') ? 400 : 500).json({ sucesso: false, erro: err.message });
+  }
+});
+
+/**
+ * GET /legado/contratos
+ * Lista contratos por órgão e vigência.
+ * Query obrigatória: dataVigenciaInicialMin, dataVigenciaInicialMax (YYYY-MM-DD)
+ * Opcional: codigoUnidadeGestora, niFornecedor, numeroContrato
+ */
+app.get('/legado/contratos', async (req, res) => {
+  try {
+    const r = await da.listarContratos(req.query);
+    res.json({ sucesso: true, fonte: 'dadosabertos.compras.gov.br', ...r });
+  } catch (err) {
+    console.error('[legado/contratos]', err.message);
+    res.status(err.message.includes('obrigat') ? 400 : 500).json({ sucesso: false, erro: err.message });
+  }
+});
+
+/**
+ * GET /legado/itens-contratos
+ * Lista itens de contratos.
+ * Query obrigatória: dataVigenciaInicialMin, dataVigenciaInicialMax (YYYY-MM-DD)
+ */
+app.get('/legado/itens-contratos', async (req, res) => {
+  try {
+    const r = await da.listarItensContratos(req.query);
+    res.json({ sucesso: true, fonte: 'dadosabertos.compras.gov.br', ...r });
+  } catch (err) {
+    console.error('[legado/itens-contratos]', err.message);
+    res.status(err.message.includes('obrigat') ? 400 : 500).json({ sucesso: false, erro: err.message });
+  }
+});
+
+/**
+ * GET /legado/uasg
+ * Informações de uma UASG.
+ * Opcional: codigoUasg, cnpjCpfOrgao, siglaUf, statusUasg (default: Ativa)
+ * Exemplo: /legado/uasg?codigoUasg=150229
+ */
+app.get('/legado/uasg', async (req, res) => {
+  try {
+    const r = await da.listarUasg(req.query);
+    res.json({ sucesso: true, fonte: 'dadosabertos.compras.gov.br', ...r });
+  } catch (err) {
+    console.error('[legado/uasg]', err.message);
+    res.status(500).json({ sucesso: false, erro: err.message });
+  }
+});
+
+/**
+ * GET /legado/orgaos
+ * Lista órgãos.
+ * Opcional: cnpjCpfOrgao, codigoOrgao, statusOrgao (default: Ativo)
+ */
+app.get('/legado/orgaos', async (req, res) => {
+  try {
+    const r = await da.listarOrgaos(req.query);
+    res.json({ sucesso: true, fonte: 'dadosabertos.compras.gov.br', ...r });
+  } catch (err) {
+    console.error('[legado/orgaos]', err.message);
+    res.status(500).json({ sucesso: false, erro: err.message });
+  }
+});
+
+/**
+ * GET /pesquisa/preco-material
+ * Pesquisa preços praticados por item do catálogo de materiais (CATMAT).
+ * Query obrigatória: codigoItemCatalogo (código CATMAT)
+ * Opcional: codigoUasg, estado, dataCompraInicio, dataCompraFim
+ * Exemplo: /pesquisa/preco-material?codigoItemCatalogo=244258&estado=BA
+ */
+app.get('/pesquisa/preco-material', async (req, res) => {
+  try {
+    const r = await da.pesquisarPrecoMaterial(req.query);
+    res.json({ sucesso: true, fonte: 'dadosabertos.compras.gov.br', ...r });
+  } catch (err) {
+    console.error('[pesquisa/preco-material]', err.message);
+    res.status(err.message.includes('obrigat') ? 400 : 500).json({ sucesso: false, erro: err.message });
+  }
+});
+
+/**
+ * GET /pesquisa/preco-material-detalhe
+ * Histórico detalhado de compras de um item de material.
+ * Query obrigatória: codigoItemCatalogo
+ */
+app.get('/pesquisa/preco-material-detalhe', async (req, res) => {
+  try {
+    const r = await da.pesquisarPrecoMaterialDetalhe(req.query);
+    res.json({ sucesso: true, fonte: 'dadosabertos.compras.gov.br', ...r });
+  } catch (err) {
+    console.error('[pesquisa/preco-material-detalhe]', err.message);
+    res.status(err.message.includes('obrigat') ? 400 : 500).json({ sucesso: false, erro: err.message });
   }
 });
 
