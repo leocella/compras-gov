@@ -44,6 +44,33 @@ const SEL_MSG = {
 };
 
 // ---------------------------------------------------------------------------
+// parseValorProposta — converte string monetária em número (ex: "R$ 1.250,99" → 1250.99)
+// ---------------------------------------------------------------------------
+function parseValorProposta(s) {
+  if (!s) return null;
+  const limpo = s.replace(/[^\d,.-]/g, '').replace(/\./g, '').replace(',', '.');
+  const n = parseFloat(limpo);
+  return Number.isFinite(n) ? n : null;
+}
+
+// ---------------------------------------------------------------------------
+// parsearLinhasPropostas — função pura: array de arrays de strings → array de objetos
+// Cada elemento de `linhas` é [item, fornecedor, cnpj, valor, situacao, marca]
+// ---------------------------------------------------------------------------
+function parsearLinhasPropostas(linhas) {
+  return linhas
+    .map((r) => ({
+      item:          r[0] || '',
+      fornecedor:    r[1] || '',
+      cnpj:          r[2] || '',
+      valorProposta: parseValorProposta(r[3]),
+      situacao:      r[4] || '',
+      marca:         r[5] || '',
+    }))
+    .filter((p) => p.fornecedor || p.item);
+}
+
+// ---------------------------------------------------------------------------
 // extrairMarcas — função pura, testável sem browser
 // ---------------------------------------------------------------------------
 function extrairMarcas(descricao) {
@@ -171,6 +198,8 @@ async function responderMensagem(page, uasg, numeroPregao, texto) {
 
 module.exports = {
   extrairMarcas,
+  parsearLinhasPropostas,
+  parseValorProposta,
   tirarScreenshot,
   rasparItensPregao,
   lerMensagensChat,

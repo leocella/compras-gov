@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { extrairMarcas } = require('./comprasgov');
+const { extrairMarcas, parsearLinhasPropostas, parseValorProposta } = require('./comprasgov');
 
 test('extrai marca obrigatória explícita', () => {
   const r = extrairMarcas('Caneta esferográfica azul. Marca obrigatória: BIC.');
@@ -46,4 +46,46 @@ test('aceita em-dash e en-dash como separador', () => {
 test('trunca no ponto-e-vírgula: captura apenas primeira marca', () => {
   const r = extrairMarcas('Marca obrigatória: BIC; Compactor.');
   assert.strictEqual(r.marcaObrigatoria, 'BIC');
+});
+
+// --- parseValorProposta ---
+
+test('parseValorProposta converte "R$ 1.250,99" em 1250.99', () => {
+  assert.strictEqual(parseValorProposta('R$ 1.250,99'), 1250.99);
+});
+
+test('parseValorProposta retorna null para string vazia', () => {
+  assert.strictEqual(parseValorProposta(''), null);
+});
+
+test('parseValorProposta retorna null para texto sem número', () => {
+  assert.strictEqual(parseValorProposta('---'), null);
+});
+
+// --- parsearLinhasPropostas ---
+
+test('parsearLinhasPropostas mapeia linha completa', () => {
+  const linhas = [['1', 'Empresa Ltda', '12.345.678/0001-90', 'R$ 500,00', 'Classificada', 'HP']];
+  const r = parsearLinhasPropostas(linhas);
+  assert.strictEqual(r.length, 1);
+  assert.strictEqual(r[0].item, '1');
+  assert.strictEqual(r[0].fornecedor, 'Empresa Ltda');
+  assert.strictEqual(r[0].cnpj, '12.345.678/0001-90');
+  assert.strictEqual(r[0].valorProposta, 500);
+  assert.strictEqual(r[0].situacao, 'Classificada');
+  assert.strictEqual(r[0].marca, 'HP');
+});
+
+test('parsearLinhasPropostas filtra linhas sem fornecedor e sem item', () => {
+  const linhas = [['', '', '', '', '', '']];
+  const r = parsearLinhasPropostas(linhas);
+  assert.strictEqual(r.length, 0);
+});
+
+test('parsearLinhasPropostas aceita valor null/undefined em campos opcionais', () => {
+  const linhas = [['2', 'Fornecedor X', '', '', '', '']];
+  const r = parsearLinhasPropostas(linhas);
+  assert.strictEqual(r.length, 1);
+  assert.strictEqual(r[0].valorProposta, null);
+  assert.strictEqual(r[0].marca, '');
 });
