@@ -4,6 +4,8 @@ const fs   = require('fs');
 const path = require('path');
 const express = require('express');
 const { chromium } = require('playwright');
+const { chromium: chromiumStealth } = require('playwright-extra');
+chromiumStealth.use(require('puppeteer-extra-plugin-stealth')());
 const { tirarScreenshot, rasparItensPregao, lerMensagensChat, responderMensagem, lerPropostasPregao } = require('./comprasgov');
 const { buscarItensPregaoApi, listarContratacoesRecentes } = require('./pncp-api');
 const { salvar, listarRaspagens, DADOS_DIR }              = require('./storage');
@@ -363,13 +365,20 @@ app.post('/sessao/iniciar', async (req, res) => {
       return res.json({ aguardando: false, jaLogado: true, sessaoSalva: sessao.sessionExists() });
     }
 
-    // Criar novo contexto de sessão (limpo, sem storageState anterior)
-    if (browserSessao) {
-      try { await browserSessao.close(); } catch { /* ignore */ }
+    // Criar novo contexto de sessão com Chrome real + stealth (evita detecção do reCAPTCHA)
+    if (contextSessao) {
+      try { await contextSessao.close(); } catch { /* ignore */ }
     }
-    browserSessao = await require('playwright').chromium.launch({ headless: false });
-    contextSessao = await browserSessao.newContext({ viewport: null });
-    pageSessao    = await contextSessao.newPage();
+    const userDataDir = path.join(__dirname, 'chrome_perfil_sessao');
+    fs.mkdirSync(userDataDir, { recursive: true });
+    contextSessao = await chromiumStealth.launchPersistentContext(userDataDir, {
+      headless: false,
+      channel:  'chrome',
+      viewport: null,
+      args:     ['--start-maximized'],
+    });
+    browserSessao = contextSessao; // alias — .close() encerra o contexto persistente
+    pageSessao    = contextSessao.pages()[0] ?? await contextSessao.newPage();
     aguardandoLogin = true;
 
     const info = await sessao.abrirLogin(pageSessao);
