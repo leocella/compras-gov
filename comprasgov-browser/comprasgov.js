@@ -48,7 +48,7 @@ const SEL_MSG = {
 // ---------------------------------------------------------------------------
 function parseValorProposta(s) {
   if (!s) return null;
-  const limpo = s.replace(/[^\d,.-]/g, '').replace(/\./g, '').replace(',', '.');
+  const limpo = s.replace(/[^\d,.-]/g, '').replace(/\./g, '').replace(/,/g, '.');
   const n = parseFloat(limpo);
   return Number.isFinite(n) ? n : null;
 }
