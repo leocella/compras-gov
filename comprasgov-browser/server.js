@@ -27,14 +27,30 @@ let pageSessao     = null;
 let aguardandoLogin = false;
 
 async function bootBrowser() {
-  console.log(`[boot] Lançando Chromium (headless=${HEADLESS})...`);
-  browser = await chromium.launch({ headless: HEADLESS });
-  // Carrega sessão salva se existir
-  const ctxOpts = sessao.opcoesContextoComSessao();
-  const context = await browser.newContext(ctxOpts);
-  page = await context.newPage();
-  await page.goto(START_URL, { waitUntil: 'domcontentloaded' });
-  console.log(`[boot] Página inicial: ${page.url()}`);
+  const cdpUrl = process.env.CDP_URL || 'http://127.0.0.1:9222';
+  console.log(`[boot] Tentando conectar ao Chrome via CDP em ${cdpUrl}...`);
+  try {
+    browser = await chromium.connectOverCDP(cdpUrl);
+    const context = browser.contexts()[0];
+    const abas = context.pages();
+    
+    // Tenta encontrar uma aba já em algum site de compras do governo, se não, usa a primeira aba ou cria nova
+    page = abas.find(p => p.url().includes('gov.br/compras') || p.url().includes('comprasnet')) || abas[0] || await context.newPage();
+    
+    // Se a aba estiver vazia, navega para a URL inicial
+    if (!page.url().startsWith('http')) {
+      await page.goto(START_URL, { waitUntil: 'domcontentloaded' });
+    }
+    console.log(`[boot] Conectado ao Chrome real! Aba ativa: ${page.url()}`);
+  } catch (err) {
+    console.log(`[boot] CDP indisponível (${err.message}). Lançando Chromium standalone (headless=${HEADLESS})...`);
+    browser = await chromium.launch({ headless: HEADLESS });
+    const ctxOpts = sessao.opcoesContextoComSessao();
+    const context = await browser.newContext(ctxOpts);
+    page = await context.newPage();
+    await page.goto(START_URL, { waitUntil: 'domcontentloaded' });
+    console.log(`[boot] Página inicial standalone: ${page.url()}`);
+  }
 }
 
 async function shutdown(signal) {
@@ -355,7 +371,8 @@ app.get('/pesquisa/preco-material-detalhe', async (req, res) => {
 
 /**
  * POST /sessao/iniciar
- * Abre uma janela do Chrome na tela de login do ComprasNet.
+ * Conecta via CDP (Chrome DevTools Protocol) a uma janela do Chrome real do usuário.
+ * O Chrome deve ser iniciado previamente com: --remote-debugging-port=9222
  * O Rafael faz o login manualmente. Chame GET /sessao/status para verificar.
  */
 app.post('/sessao/iniciar', async (req, res) => {
@@ -365,24 +382,56 @@ app.post('/sessao/iniciar', async (req, res) => {
       return res.json({ aguardando: false, jaLogado: true, sessaoSalva: sessao.sessionExists() });
     }
 
-    // Criar novo contexto de sessão com Chrome real + stealth (evita detecção do reCAPTCHA)
-    if (contextSessao) {
-      try { await contextSessao.close(); } catch { /* ignore */ }
+    // Conectar ao Chrome real já aberto pelo usuário via CDP (aproveitar se bootBrowser já conectou)
+    const cdpUrl = process.env.CDP_URL || 'http://127.0.0.1:9222';
+    try {
+      if (!browserSessao || !browserSessao.isConnected()) {
+        // Tenta usar a conexão principal se existir
+        if (browser && browser.isConnected() && browser.contexts().length > 0) {
+          browserSessao = browser;
+        } else {
+          browserSessao = await chromium.connectOverCDP(cdpUrl);
+        }
+      }
+    } catch (err) {
+      return res.status(500).json({
+        sucesso: false,
+        erro: `Não foi possível conectar ao Chrome via CDP em ${cdpUrl}. Inicie seu navegador com a flag --remote-debugging-port=9222. Detalhe: ${err.message}`
+      });
     }
-    const userDataDir = path.join(__dirname, 'chrome_perfil_sessao');
-    fs.mkdirSync(userDataDir, { recursive: true });
-    contextSessao = await chromiumStealth.launchPersistentContext(userDataDir, {
-      headless: false,
-      channel:  'chrome',
-      viewport: null,
-      args:     ['--start-maximized'],
-    });
-    browserSessao = contextSessao; // alias — .close() encerra o contexto persistente
-    pageSessao    = contextSessao.pages()[0] ?? await contextSessao.newPage();
-    aguardandoLogin = true;
 
+    // Usar o primeiro contexto (default) do Chrome do usuário
+    contextSessao = browserSessao.contexts()[0];
+    
+    // Buscar aba que tenha comprasnet ou pncp/gov.br/compras
+    const abas = contextSessao.pages();
+    pageSessao = abas.find(p => p.url().includes('comprasnet') || p.url().includes('gov.br/compras'));
+    
+    if (pageSessao) {
+      try { await pageSessao.bringToFront(); } catch { /* ignore */ }
+      
+      // Verifica se a aba encontrada JÁ ESTÁ logada
+      const logado = await sessao.verificarLoginConcluido(pageSessao);
+      if (logado && !pageSessao.url().includes('login')) {
+        // Já está logado! Salvar a sessão e retornar
+        await sessao.salvarSessao(contextSessao);
+        aguardandoLogin = false;
+        return res.json({ aguardando: false, jaLogado: true, sessaoSalva: true, url: pageSessao.url() });
+      } else {
+        // Está na tela de login (ou em outra tela não logada do comprasnet)
+        aguardandoLogin = true;
+        const info = await sessao.abrirLogin(pageSessao);
+        return res.json({ ...info, instrucao: 'Faça o login na aba encontrada. Chame GET /sessao/status para verificar.' });
+      }
+    }
+
+    // Se não encontrou nenhuma aba relacionada ao ComprasNet, cria uma nova e navega
+    pageSessao = await contextSessao.newPage();
+    aguardandoLogin = true;
     const info = await sessao.abrirLogin(pageSessao);
-    res.json({ ...info, instrucao: 'Faça o login na janela aberta. Chame GET /sessao/status para verificar.' });
+    try { await pageSessao.bringToFront(); } catch { /* ignore */ }
+
+    res.json({ ...info, instrucao: 'Faça o login na nova aba aberta no seu Chrome. Chame GET /sessao/status para verificar.' });
   } catch (err) {
     console.error('[sessao/iniciar]', err.message);
     res.status(500).json({ sucesso: false, erro: err.message });
@@ -420,19 +469,25 @@ app.get('/sessao/status', async (req, res) => {
 
 /**
  * POST /sessao/encerrar
- * Fecha o browser de sessão e apaga o arquivo session.json.
+ * Desconecta do browser de sessão e apaga o arquivo session.json.
  */
 app.post('/sessao/encerrar', async (req, res) => {
   try {
     if (browserSessao) {
-      await browserSessao.close();
+      // Fecha a aba de sessão criada, para manter limpo o Chrome do usuário
+      if (pageSessao && !pageSessao.isClosed()) {
+        try { await pageSessao.close(); } catch { /* ignore */ }
+      }
+      // Desconecta do CDP (não fecha o browser do usuário)
+      try { await browserSessao.close(); } catch { /* ignore */ }
+      
       browserSessao = null;
       contextSessao = null;
       pageSessao    = null;
     }
     sessao.apagarSessao();
     aguardandoLogin = false;
-    res.json({ sucesso: true, mensagem: 'Sessão encerrada e arquivo apagado.' });
+    res.json({ sucesso: true, mensagem: 'Sessão encerrada (desconectado do CDP) e arquivo apagado.' });
   } catch (err) {
     res.status(500).json({ sucesso: false, erro: err.message });
   }
