@@ -463,6 +463,7 @@ app.get('/recon/html', async (req, res) => {
   try {
     const html      = await pageSessao.content();
     const arquivo   = path.join(__dirname, 'dados', `recon-${Date.now()}.html`);
+    fs.mkdirSync(path.dirname(arquivo), { recursive: true });
     fs.writeFileSync(arquivo, html, 'utf8');
     console.log(`[recon/html] Salvo: ${arquivo} (${html.length} bytes)`);
     res.json({ sucesso: true, arquivo, bytes: html.length, urlCapturada: pageSessao.url() });
