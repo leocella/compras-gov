@@ -1,5 +1,7 @@
 'use strict';
 
+const fs   = require('fs');
+const path = require('path');
 const express = require('express');
 const { chromium } = require('playwright');
 const { tirarScreenshot, rasparItensPregao, lerMensagensChat, responderMensagem } = require('./comprasgov');
@@ -51,8 +53,14 @@ app.get('/status', (req, res) => {
 });
 
 app.get('/screenshot', async (req, res) => {
+  const alvo = req.query.sessao === '1' ? pageSessao : page;
+  if (!alvo) {
+    return res.status(503).json({ sucesso: false, erro: req.query.sessao === '1'
+      ? 'Sem sessão ativa — chame POST /sessao/iniciar'
+      : 'Browser principal não iniciado' });
+  }
   try {
-    const screenshotBase64 = await tirarScreenshot(page);
+    const screenshotBase64 = await tirarScreenshot(alvo);
     res.json({ sucesso: true, screenshotBase64 });
   } catch (err) {
     console.error('[screenshot]', err);
@@ -417,6 +425,49 @@ app.post('/sessao/encerrar', async (req, res) => {
     aguardandoLogin = false;
     res.json({ sucesso: true, mensagem: 'Sessão encerrada e arquivo apagado.' });
   } catch (err) {
+    res.status(500).json({ sucesso: false, erro: err.message });
+  }
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// Endpoints de RECON — navegação e dump HTML da sessão autenticada
+// ───────────────────────────────────────────────────────────────────────────
+
+/**
+ * POST /recon/navegar
+ * Body: { url: string }
+ * Navega pageSessao para a URL informada. Usar para explorar o portal após login.
+ */
+app.post('/recon/navegar', async (req, res) => {
+  const { url } = req.body || {};
+  if (!url)      return res.status(400).json({ erro: 'campo "url" obrigatório' });
+  if (!pageSessao) return res.status(401).json({ erro: 'Sem sessão ativa — chame POST /sessao/iniciar' });
+
+  try {
+    await pageSessao.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+    res.json({ sucesso: true, url: pageSessao.url() });
+  } catch (err) {
+    console.error('[recon/navegar]', err.message);
+    res.status(500).json({ sucesso: false, erro: err.message });
+  }
+});
+
+/**
+ * GET /recon/html
+ * Salva o HTML completo da página atual de pageSessao em dados/recon-<timestamp>.html
+ * e retorna o caminho do arquivo. Usar após /recon/navegar.
+ */
+app.get('/recon/html', async (req, res) => {
+  if (!pageSessao) return res.status(401).json({ erro: 'Sem sessão ativa — chame POST /sessao/iniciar' });
+
+  try {
+    const html      = await pageSessao.content();
+    const arquivo   = path.join(__dirname, 'dados', `recon-${Date.now()}.html`);
+    fs.writeFileSync(arquivo, html, 'utf8');
+    console.log(`[recon/html] Salvo: ${arquivo} (${html.length} bytes)`);
+    res.json({ sucesso: true, arquivo, bytes: html.length, urlCapturada: pageSessao.url() });
+  } catch (err) {
+    console.error('[recon/html]', err.message);
     res.status(500).json({ sucesso: false, erro: err.message });
   }
 });
