@@ -44,6 +44,18 @@ const SEL_MSG = {
 };
 
 // ---------------------------------------------------------------------------
+// Seletores de propostas — portal legado (comprasnet.gov.br)
+// ⚠️ RECON_NEEDED: preencher após Task 4 (recon manual)
+// ---------------------------------------------------------------------------
+const SEL_PROP = {
+  urlPropostas:    '',  // ← recon: URL da página de consulta de propostas para fornecedor
+  campoUasg:       '',  // ← recon
+  campoNumero:     '',  // ← recon
+  botaoBuscar:     '',  // ← recon
+  linhasPropostas: '',  // ← recon: seletor das linhas da tabela de propostas
+};
+
+// ---------------------------------------------------------------------------
 // parseValorProposta — converte string monetária em número (ex: "R$ 1.250,99" → 1250.99)
 // ---------------------------------------------------------------------------
 function parseValorProposta(s) {
@@ -196,6 +208,45 @@ async function responderMensagem(page, uasg, numeroPregao, texto) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// lerPropostasPregao — requer sessão logada
+// ⚠️ SEL_PROP precisa ser preenchido após recon (Task 4)
+// ---------------------------------------------------------------------------
+async function lerPropostasPregao(page, uasg, numeroPregao) {
+  if (!SEL_PROP.urlPropostas) {
+    throw new Error('SEL_PROP não configurado — execute o recon (Task 4) e preencha os seletores');
+  }
+
+  await page.goto(SEL_PROP.urlPropostas, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  await page.waitForLoadState('networkidle');
+
+  if (page.url().includes('login')) {
+    throw new Error('Sessão expirada — faça login via POST /sessao/iniciar');
+  }
+
+  try {
+    await page.fill(SEL_PROP.campoUasg, String(uasg));
+    await page.fill(SEL_PROP.campoNumero, String(numeroPregao));
+    await page.click(SEL_PROP.botaoBuscar);
+    await page.waitForLoadState('networkidle');
+  } catch (e) {
+    throw new Error(
+      `Seletores de propostas não encontrados (⚠️ RECON_NEEDED). ` +
+      `Use GET /recon/html para inspecionar. Erro: ${e.message}`
+    );
+  }
+
+  const rawLinhas = await page.$$eval(SEL_PROP.linhasPropostas, (rows) => {
+    return rows.map((r) => {
+      const cols = Array.from(r.querySelectorAll('td'));
+      return cols.map((c) => c.textContent.trim());
+    });
+  });
+
+  const propostas = parsearLinhasPropostas(rawLinhas);
+  return { propostas, total: propostas.length, url: page.url() };
+}
+
 module.exports = {
   extrairMarcas,
   parsearLinhasPropostas,
@@ -204,6 +255,8 @@ module.exports = {
   rasparItensPregao,
   lerMensagensChat,
   responderMensagem,
+  lerPropostasPregao,
   SEL,
   SEL_MSG,
+  SEL_PROP,
 };

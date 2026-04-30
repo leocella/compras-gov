@@ -4,7 +4,7 @@ const fs   = require('fs');
 const path = require('path');
 const express = require('express');
 const { chromium } = require('playwright');
-const { tirarScreenshot, rasparItensPregao, lerMensagensChat, responderMensagem } = require('./comprasgov');
+const { tirarScreenshot, rasparItensPregao, lerMensagensChat, responderMensagem, lerPropostasPregao } = require('./comprasgov');
 const { buscarItensPregaoApi, listarContratacoesRecentes } = require('./pncp-api');
 const { salvar, listarRaspagens, DADOS_DIR }              = require('./storage');
 const sessao = require('./sessao');
@@ -528,6 +528,39 @@ app.post('/mensagens/responder', async (req, res) => {
     res.json({ sucesso: true, uasg: String(uasg), numeroPregao: String(numeroPregao), texto, ...resultado });
   } catch (err) {
     console.error('[mensagens/responder]', err.message);
+    res.status(500).json({ sucesso: false, erro: err.message });
+  } finally {
+    busy = false;
+  }
+});
+
+/**
+ * POST /pregao/propostas
+ * Body: { uasg, numeroPregao }
+ * Raspa propostas de um pregão. Requer sessão ativa (POST /sessao/iniciar primeiro).
+ * SEL_PROP deve estar preenchido (Task 4 do plano de implementação).
+ */
+app.post('/pregao/propostas', async (req, res) => {
+  const { uasg, numeroPregao } = req.body || {};
+  if (!uasg)         return res.status(400).json({ erro: 'campo "uasg" obrigatório' });
+  if (!numeroPregao) return res.status(400).json({ erro: 'campo "numeroPregao" obrigatório' });
+  if (!pageSessao)   return res.status(401).json({ erro: 'Sem sessão ativa — chame POST /sessao/iniciar primeiro' });
+
+  if (busy) return res.status(409).json({ erro: 'ocupado' });
+  busy = true;
+
+  try {
+    const resultado = await lerPropostasPregao(pageSessao, uasg, numeroPregao);
+    res.json({
+      sucesso: true,
+      uasg: String(uasg),
+      numeroPregao: String(numeroPregao),
+      totalPropostas: resultado.total,
+      propostas: resultado.propostas,
+      url: resultado.url,
+    });
+  } catch (err) {
+    console.error('[pregao/propostas]', err.message);
     res.status(500).json({ sucesso: false, erro: err.message });
   } finally {
     busy = false;
