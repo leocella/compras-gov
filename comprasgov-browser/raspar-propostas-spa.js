@@ -3,12 +3,25 @@ const stealth = require('puppeteer-extra-plugin-stealth')();
 chromium.use(stealth);
 
 const fs = require('fs');
+const path = require('path');
 
 async function extrairPropostasParaCsv(urlCompra) {
-  console.log('Iniciando Chromium (com interface gráfica)...');
-  const browser = await chromium.launch({ headless: false });
-  const context = await browser.newContext();
-  const page = await context.newPage();
+  console.log('Iniciando o verdadeiro Google Chrome (Modo Anti-Bot Avançado)...');
+  
+  const userDataDir = path.join(__dirname, 'chrome_perfil_robo');
+  if (!fs.existsSync(userDataDir)) {
+    fs.mkdirSync(userDataDir, { recursive: true });
+  }
+
+  // Lança o Chrome usando um perfil persistente para ganhar "Trust Score" do hCaptcha
+  const context = await chromium.launchPersistentContext(userDataDir, {
+    headless: false,
+    channel: 'chrome', // Usa o Chrome instalado na máquina (não o Chromium embutido)
+    viewport: null,
+    args: ['--start-maximized']
+  });
+  
+  const page = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
   
   let jsonCapturado = null;
   let dadosCompra = null;
@@ -17,33 +30,30 @@ async function extrairPropostasParaCsv(urlCompra) {
   page.on('response', async (res) => {
     const url = res.url();
     
-    // Captura os dados gerais da compra (opcional, mas bom pra ter contexto)
-    if (url.includes('/public/v1/compras/') && !url.includes('/itens') && res.request().method() === 'GET') {
-      try { dadosCompra = await res.json(); } catch(e) {}
-    }
-    
-    // Captura a lista de itens e as PROPOSTAS dos fornecedores
-    if (url.includes('/itens') && url.includes('fase-externa') && res.request().method() === 'GET') {
+    // Captura qualquer chamada da API de compras que retorne sucesso
+    if (url.includes('/v1/compras/') && res.request().method() === 'GET') {
       try {
-        console.log('>>> JSON da API interceptado com sucesso!');
-        jsonCapturado = await res.json();
-      } catch(e) {
-        console.error('Falha ao ler JSON interceptado:', e.message);
-      }
+        const json = await res.json();
+        // Se o JSON tiver uma propriedade itens ou for um array com itens, é o que queremos!
+        if (json.itens || Array.isArray(json) || (json._links && json.itens !== undefined) || url.includes('/itens')) {
+           console.log(`\n>>> BINGO! JSON interceptado da URL: ${url}`);
+           jsonCapturado = json;
+        } else if (!dadosCompra) {
+           dadosCompra = json; // Guarda os dados básicos do pregão
+        }
+      } catch(e) {}
     }
   });
 
   console.log(`\nNavegando para: ${urlCompra}`);
-  console.log('⚠️ ATENÇÃO: Se aparecer um hCaptcha (desafio de imagens), resolva-o manualmente na janela do Chrome!');
-  console.log('Aguardando os dados da API carregarem...\n');
+  console.log('⚠️ DICA: O hCaptcha invisível do Serpro é bugado. Continue dando F5 (Atualizar a página) até a tabela carregar!');
+  console.log('Aguardando os dados da API...\n');
 
   try {
     await page.goto(urlCompra, { waitUntil: 'domcontentloaded', timeout: 0 });
     
-    // Loop aguardando a captura do JSON (espera até o usuário passar do captcha)
     while (!jsonCapturado) {
       await page.waitForTimeout(1000);
-      // Mantém o script rodando enquanto o json não chegar
     }
     
     console.log('Processando propostas para gerar o Excel/CSV...');
@@ -92,7 +102,7 @@ async function extrairPropostasParaCsv(urlCompra) {
     console.error('Erro durante a execução:', err.message);
   } finally {
     console.log('Fechando navegador...');
-    await browser.close();
+    await context.close();
   }
 }
 

@@ -213,7 +213,7 @@ async function responderMensagem(page, uasg, numeroPregao, texto) {
 // ⚠️ SEL_PROP precisa ser preenchido após recon (Task 4)
 // ---------------------------------------------------------------------------
 async function lerPropostasPregao(page, uasg, numeroPregao) {
-  if (!SEL_PROP.urlPropostas) {
+  if (!SEL_PROP.urlPropostas || !SEL_PROP.linhasPropostas) {
     throw new Error('SEL_PROP não configurado — execute o recon (Task 4) e preencha os seletores');
   }
 
