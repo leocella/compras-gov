@@ -2,3 +2,6 @@ node_modules/
 sessions/
 dados/
 *.log
+
+chrome-debug-profile/
+dados/
