@@ -111,6 +111,7 @@ async function extrairDadosPaginaAtual(page, numItem) {
 
       let porte = '', status = '', razaoSocial = '', uf = '';
       let valorOfertado = '', valorNegociado = '';
+      let marca = '', modelo = '';
       let idx = 1;
 
       if (idx < linhas.length && /^(ME\/EPP|ME|EPP|DEMAIS|Demais)$/i.test(linhas[idx])) {
@@ -138,9 +139,15 @@ async function extrairDadosPaginaAtual(page, numItem) {
         else if (linhas[j].startsWith('R$') && valorOfertado) valorNegociado = linhas[j];
       }
 
+      // Marca/Fabricante e Modelo/Versao (aparecem no accordion "Proposta" expandido)
+      const marcaMatch = bloco.match(/Marca\/Fabricante\n([^\n]+)/i);
+      const modeloMatch = bloco.match(/Modelo\/Versao\n([^\n]+)/i);
+      if (marcaMatch) marca = marcaMatch[1].trim();
+      if (modeloMatch) modelo = modeloMatch[1].trim();
+
       result.propostas.push({
         posicao: String(posicao), cnpj, porte, status, razaoSocial, uf,
-        valorOfertado, valorNegociado, marca: '', modelo: '', fabricante: '',
+        valorOfertado, valorNegociado, marca, modelo, fabricante: marca,
       });
     }
     return result;
