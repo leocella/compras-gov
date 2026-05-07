@@ -1,6 +1,7 @@
 require('dotenv').config();
 'use strict';
 
+const crypto = require('crypto');
 const fs   = require('fs');
 const path = require('path');
 const express = require('express');
@@ -67,7 +68,10 @@ app.use(express.json());
 
 app.use((req, res, next) => {
   if (req.path === '/events') return next(); // /events tem auth própria via ?key=
-  if (req.headers['x-api-key'] !== process.env.API_KEY)
+  const key      = process.env.API_KEY;
+  const provided = req.headers['x-api-key'] || '';
+  if (!key || provided.length !== key.length ||
+      !crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(key)))
     return res.status(401).json({ erro: 'Não autorizado' });
   next();
 });
