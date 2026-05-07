@@ -1,3 +1,4 @@
+require('dotenv').config();
 'use strict';
 
 const fs   = require('fs');
@@ -11,6 +12,8 @@ const { buscarItensPregaoApi, listarContratacoesRecentes } = require('./pncp-api
 const { salvar, listarRaspagens, DADOS_DIR }              = require('./storage');
 const sessao = require('./sessao');
 const da     = require('./dadosabertos-api');
+const telegram  = require('./telegram');
+const agendador = require('./agendador');
 
 const PORT      = parseInt(process.env.PORT || '3099', 10);
 const START_URL = process.env.START_URL || 'https://www.comprasnet.gov.br';
@@ -64,9 +67,11 @@ app.use(express.json());
 
 app.get('/status', (req, res) => {
   res.json({
-    online: true,
-    browserPronto: !!page,
-    url: page ? page.url() : null,
+    online:          true,
+    browserPronto:   !!page,
+    url:             page ? page.url() : null,
+    sessaoAtiva:     !!pageSessao,
+    agendadorAtivo:  !!process.env.TELEGRAM_TOKEN,
   });
 });
 
@@ -635,6 +640,25 @@ app.post('/pregao/propostas', async (req, res) => {
 
 (async () => {
   await bootBrowser();
+
+  if (process.env.TELEGRAM_TOKEN) {
+    try {
+      telegram.init(process.env.TELEGRAM_TOKEN, process.env.TELEGRAM_CHAT_ID);
+      telegram.iniciarPolling();
+      agendador.init({
+        telegram,
+        getPage:        () => page,
+        getPageSessao:  () => pageSessao,
+        comprasAlvoPath: path.join(__dirname, 'compras-alvo.json'),
+      });
+      console.log('[boot] Telegram + agendador inicializados.');
+    } catch (err) {
+      console.error('[boot] Telegram desabilitado:', err.message);
+    }
+  } else {
+    console.log('[boot] TELEGRAM_TOKEN não definido — agendador desabilitado.');
+  }
+
   app.listen(PORT, '127.0.0.1', () => {
     console.log(`[boot] API rodando em http://127.0.0.1:${PORT}`);
   });
