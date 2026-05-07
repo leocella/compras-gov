@@ -88,7 +88,9 @@ async function extrairDadosPaginaAtual(page, numItem) {
     const result = { numeroItem: itemNum, dadosItem: {}, propostas: [], headers: [] };
 
     // Dados do item
+    // 1. Tentar match completo (com Qtde Aceita e Valor estimado)
     const itemMatch = texto.match(/(\d+)\s+(.+?)\n(?:Exclusividade[^\n]*\n)?(?:(Homologado|Em andamento|Deserto|Fracassado|Revogado|Anulado)[^\n]*\n)?Qtde solicitada:\nQtde aceita:\nValor estimado \(unitário\)\n(\d+)\n(\d+)\nR\$\s*([\d.,]+)/);
+    
     if (itemMatch) {
       result.dadosItem = {
         descricao: itemMatch[2].trim(),
@@ -97,6 +99,20 @@ async function extrairDadosPaginaAtual(page, numItem) {
         valorEstimado: itemMatch[6],
         situacaoItem: itemMatch[3] || '',
       };
+    } else {
+      // 2. Fallback mais permissivo (ignora a presença do valor estimado)
+      const limpo = texto.trim();
+      const descMatch = limpo.match(/^(\d+)[\s\n]+([^\n]+)/);
+      const qtdMatch = limpo.match(/Qtde solicitada:\s*\n?\s*(\d+)/i) || limpo.match(/Quantidade:\s*\n?\s*(\d+)/i);
+      
+      if (descMatch) {
+        result.dadosItem = {
+          descricao: descMatch[2].trim(),
+          quantidade: qtdMatch ? qtdMatch[1] : '',
+        };
+      } else {
+         result.dadosItem = { descricao: "Item não identificado" };
+      }
     }
 
     // Propostas (cards de fornecedores via texto)
@@ -139,17 +155,29 @@ async function extrairDadosPaginaAtual(page, numItem) {
         else if (linhas[j].startsWith('R$') && valorOfertado) valorNegociado = linhas[j];
       }
 
-      // Marca/Fabricante e Modelo/Versao (aparecem no accordion "Proposta" expandido)
-      const marcaMatch = bloco.match(/Marca\/Fabricante\n([^\n]+)/i);
-      const modeloMatch = bloco.match(/Modelo\/Versao\n([^\n]+)/i);
+      // Marca/Fabricante e Modelo/Versao
+      const marcaMatch = bloco.match(/(?:Marca\/Fabricante|Marca)[:\s]*\n?([^\n]+)/i);
+      const modeloMatch = bloco.match(/(?:Modelo\/Versao|Modelo)[:\s]*\n?([^\n]+)/i);
+      const fabricanteMatch = bloco.match(/Fabricante[:\s]*\n?([^\n]+)/i);
       if (marcaMatch) marca = marcaMatch[1].trim();
       if (modeloMatch) modelo = modeloMatch[1].trim();
+      const fab = fabricanteMatch ? fabricanteMatch[1].trim() : marca;
 
       result.propostas.push({
         posicao: String(posicao), cnpj, porte, status, razaoSocial, uf,
-        valorOfertado, valorNegociado, marca, modelo, fabricante: marca,
+        valorOfertado, valorNegociado, marca, modelo, fabricante: fab,
       });
     }
+    
+    // Tenta arrumar a descrição se tiver falhado
+    if (!result.dadosItem.descricao || result.dadosItem.descricao === "Item não identificado") {
+       const linhasTxt = texto.split('\n').map(l => l.trim()).filter(l => l);
+       if (linhasTxt.length > 1) {
+           // Geralmente a descrição é a segunda ou terceira linha
+           result.dadosItem.descricao = linhasTxt[1] + (linhasTxt[2] && linhasTxt[2].length > 10 ? " " + linhasTxt[2] : "");
+       }
+    }
+    
     return result;
   }, numItem);
 
@@ -172,6 +200,9 @@ async function expandirCardsECapturarDetalhes(page, numItem) {
     '[class*="fornecedor"] [class*="header"]',
     '[class*="proposta-header"]',
     '[class*="card-header"]',
+    '[aria-expanded]',
+    '.br-accordion',
+    '.br-item'
   ];
 
   let seletorFuncional = null;
@@ -203,7 +234,7 @@ async function expandirCardsECapturarDetalhes(page, numItem) {
         await sleep(1500);
 
         // Capturar texto expandido
-        const textoExpandido = await page.evaluate((idx, sel) => {
+        const textoExpandido = await page.evaluate(([idx, sel]) => {
           const panels = document.querySelectorAll(sel);
           const panel = panels[idx];
           // O conteúdo fica no elemento pai ou irmão do header
@@ -212,7 +243,7 @@ async function expandirCardsECapturarDetalhes(page, numItem) {
           // Fallback: pegar o próximo sibling
           const next = panel.nextElementSibling;
           return next ? next.innerText : '';
-        }, i, seletorFuncional);
+        }, [i, seletorFuncional]);
 
         // Extrair CNPJ, marca, modelo do texto expandido
         const cnpjMatch = textoExpandido.match(/(\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2})/);
@@ -309,77 +340,110 @@ async function reconDetalhes(page) {
 async function gerarExcel(resultados, compraId) {
   ensureDir(DADOS_DIR);
   const wb = new ExcelJS.Workbook();
-  const ws = wb.addWorksheet('Propostas');
+  const ws = wb.addWorksheet('Exportação de resultados');
 
-  const FILL_PRETO  = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF000000' } };
-  const FONT_HEADER = { bold: true, color: { argb: 'FFFFFFFF' }, size: 11, name: 'Calibri' };
-  const FILL_CINZA  = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9D9D9' } };
-  const FONT_ITEM   = { bold: true, size: 11, name: 'Calibri' };
-  const BORDER      = { top: {style:'thin'}, bottom: {style:'thin'}, left: {style:'thin'}, right: {style:'thin'} };
+  const EMPTY = " ";
 
+  // Cabeçalhos (Linha 1)
   ws.columns = [
-    { header: 'Item',             key: 'item',           width: 8  },
-    { header: 'Posição',          key: 'posicao',        width: 10 },
-    { header: 'CNPJ',             key: 'cnpj',           width: 22 },
-    { header: 'Razão Social',     key: 'razaoSocial',    width: 45 },
-    { header: 'UF',               key: 'uf',             width: 5  },
-    { header: 'Porte',            key: 'porte',          width: 12 },
-    { header: 'Marca',            key: 'marca',          width: 20 },
-    { header: 'Modelo',           key: 'modelo',         width: 20 },
-    { header: 'Valor Ofertado',   key: 'valorOfertado',  width: 18 },
-    { header: 'Quantidade',       key: 'quantidade',     width: 14 },
-    { header: 'Valor Total',      key: 'valorTotal',     width: 18 },
-    { header: 'Valor Negociado',  key: 'valorNegociado', width: 18 },
-    { header: 'Status',           key: 'status',         width: 25 },
-    { header: 'Descrição',        key: 'descricao',      width: 50 },
+    { header: EMPTY,               key: 'colA',         width: 3 },
+    { header: 'Posição',           key: 'posicao',      width: 10 },
+    { header: 'Item',              key: 'item',         width: 8 },
+    { header: 'Descrição',         key: 'descricao',    width: 40 },
+    { header: 'CNPJ',              key: 'cnpj',         width: 18 },
+    { header: 'Nome Empresa',      key: 'razaoSocial',  width: 40 },
+    { header: 'Porte',             key: 'porte',        width: 12 },
+    { header: 'Modelo',            key: 'modelo',       width: 20 },
+    { header: 'Marca',             key: 'marca',        width: 20 },
+    { header: 'Fabricante',        key: 'fabricante',   width: 20 },
+    { header: 'Quantidade',        key: 'quantidade',   width: 12 },
+    { header: 'Unidade de medida', key: 'unidade',      width: 18 },
+    { header: 'Valor Unitário',    key: 'valorUnitario',width: 18 },
+    { header: 'Valor Total',       key: 'valorTotal',   width: 18 },
   ];
 
-  const hr = ws.getRow(1);
-  hr.eachCell(c => { c.fill = FILL_PRETO; c.font = FONT_HEADER; c.border = BORDER; c.alignment = { horizontal:'center', vertical:'middle', wrapText:true }; });
-  hr.height = 25;
+  function soDigitos(cnpj) {
+    if (!cnpj) return EMPTY;
+    const digits = String(cnpj).replace(/[^\d]/g, '');
+    return digits || EMPTY;
+  }
 
-  let row = 2;
+  function parseValorUnitario(s) {
+    if (!s) return null;
+    const n = parseFloat(String(s).replace(/[R$\s]/g, '').replace(/\./g, '').replace(',', '.'));
+    return Number.isFinite(n) ? n : null;
+  }
+
+  function parseQuantidade(s) {
+    if (!s) return null;
+    const n = parseInt(String(s).replace(/[^\d]/g, ''), 10);
+    return Number.isFinite(n) ? n : null;
+  }
+
   for (const r of resultados) {
-    // Linha cinza do item
-    const ir = ws.getRow(row);
-    ir.getCell('item').value = `Item ${r.numeroItem}`;
-    ir.getCell('descricao').value = r.dadosItem.descricao || '';
-    ir.getCell('quantidade').value = parseQtd(r.dadosItem.quantidade);
-    ir.eachCell(c => { c.fill = FILL_CINZA; c.font = FONT_ITEM; c.border = BORDER; });
-    row++;
+    const temDescricao = r.dadosItem && r.dadosItem.descricao;
+    const temPropostas = r.propostas && r.propostas.length > 0;
+    
+    // Só pula se não tiver NENHUMA descrição E NENHUMA proposta
+    if (!temDescricao && !temPropostas) continue;
+
+    // 1. Linha-cabeçalho do item
+    const qtd = r.dadosItem ? parseQuantidade(r.dadosItem.quantidade) : null;
+    ws.addRow({
+      colA: EMPTY,
+      posicao: EMPTY,
+      item: String(r.numeroItem || EMPTY),
+      descricao: temDescricao ? r.dadosItem.descricao : EMPTY,
+      cnpj: EMPTY,
+      razaoSocial: EMPTY,
+      porte: EMPTY,
+      modelo: EMPTY,
+      marca: EMPTY,
+      fabricante: EMPTY,
+      quantidade: qtd !== null ? qtd : EMPTY,
+      unidade: EMPTY,
+      valorUnitario: EMPTY,
+      valorTotal: EMPTY,
+    });
 
     if (!r.propostas || r.propostas.length === 0) continue;
 
-    for (const p of r.propostas) {
-      const rn = row;
-      const wr = ws.getRow(rn);
-      wr.getCell('item').value = r.numeroItem;
-      wr.getCell('posicao').value = p.posicao;
-      wr.getCell('cnpj').value = p.cnpj;
-      wr.getCell('razaoSocial').value = p.razaoSocial;
-      wr.getCell('uf').value = p.uf || '';
-      wr.getCell('porte').value = p.porte;
-      wr.getCell('marca').value = p.marca || '';
-      wr.getCell('modelo').value = p.modelo || '';
-      wr.getCell('status').value = p.status;
-      wr.getCell('descricao').value = r.dadosItem.descricao || '';
+    // 2. Linhas de proposta
+    const propostasOrdenadas = r.propostas.sort((a, b) => {
+      const posA = parseInt(String(a.posicao).replace(/[^\d]/g, ''), 10) || 999;
+      const posB = parseInt(String(b.posicao).replace(/[^\d]/g, ''), 10) || 999;
+      return posA - posB;
+    });
 
-      const val = parseValor(p.valorOfertado);
-      wr.getCell('valorOfertado').value = val;
-      wr.getCell('valorOfertado').numFmt = '#,##0.00';
-      wr.getCell('quantidade').value = parseQtd(r.dadosItem.quantidade);
-      // Fórmula: Valor Total = I (valorOfertado col 9) * J (quantidade col 10)
-      wr.getCell('valorTotal').value = { formula: `I${rn}*J${rn}`, result: 0 };
-      wr.getCell('valorTotal').numFmt = '#,##0.00';
-      const valNeg = parseValor(p.valorNegociado);
-      wr.getCell('valorNegociado').value = valNeg;
-      if (valNeg) wr.getCell('valorNegociado').numFmt = '#,##0.00';
-      wr.eachCell(c => { c.border = BORDER; c.alignment = { vertical:'middle', wrapText:true }; });
-      row++;
+    for (let idx = 0; idx < propostasOrdenadas.length; idx++) {
+      const p = propostasOrdenadas[idx];
+      const valOfertado = parseValorUnitario(p.valorOfertado);
+      let valTotal = EMPTY;
+      
+      if (valOfertado !== null && qtd !== null) {
+        valTotal = valOfertado * qtd;
+      }
+
+      ws.addRow({
+        colA: EMPTY,
+        posicao: `${idx + 1}º`,
+        item: EMPTY,
+        descricao: EMPTY,
+        cnpj: soDigitos(p.cnpj),
+        razaoSocial: p.razaoSocial || EMPTY,
+        porte: p.porte || EMPTY,
+        modelo: p.modelo || EMPTY,
+        marca: p.marca || EMPTY,
+        fabricante: p.fabricante || EMPTY,
+        quantidade: EMPTY,
+        unidade: EMPTY,
+        valorUnitario: valOfertado !== null ? valOfertado : EMPTY,
+        valorTotal: valTotal !== EMPTY ? valTotal : EMPTY,
+      });
     }
   }
 
-  const nome = `Propostas_${compraId}_${hoje()}.xlsx`;
+  const nome = `Resultados_CN_${compraId}_RASPAGEM.xlsx`;
   const caminho = path.join(DADOS_DIR, nome);
   await wb.xlsx.writeFile(caminho);
   log(`\n✅ Excel: ${caminho}`);
@@ -502,8 +566,15 @@ async function main() {
     // --- EXTRAÇÃO ---
     const resultados = [];
 
-    // Item 1: já carregado
-    log('Extraindo item 1 (já carregado)...');
+    // Verificar se estamos na compra certa, senão navega
+    if (!urlAtual.includes(compraId)) {
+      log(`⚠️ O Chrome está em outra compra. Navegando para a compra ${compraId}...`);
+      await page.goto(`https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/public/compras/acompanhamento-compra/item/1?compra=${compraId}`);
+      await sleep(5000); // Aguarda carregar
+    }
+
+    // Item 1: já carregado (ou recém carregado)
+    log('Extraindo item 1...');
     const item1 = await extrairDadosPaginaAtual(page, 1);
     if (isExpandir) {
       const det = await expandirCardsECapturarDetalhes(page, 1);
@@ -549,4 +620,19 @@ async function main() {
   }
 }
 
-main();
+if (require.main === module) {
+  main();
+}
+
+module.exports = {
+  conectarChrome,
+  navegarParaItemSPA,
+  extrairDadosPaginaAtual,
+  expandirCardsECapturarDetalhes,
+  reconDetalhes,
+  gerarExcel,
+  salvarSnapshot,
+  hoje,
+  sleep,
+  log
+};

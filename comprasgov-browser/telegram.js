@@ -3,7 +3,7 @@
 const https = require('https');
 
 let _token  = '';
-let _chatId = '';
+let _chatId = [];
 let _polling = false;
 let _ultimoUpdateId = 0;
 const _detalhesMap = new Map();
@@ -15,7 +15,7 @@ function init(token, chatId) {
   if (!token)  throw new Error('[telegram] TELEGRAM_TOKEN não definido no .env');
   if (!chatId) throw new Error('[telegram] TELEGRAM_CHAT_ID não definido no .env');
   _token  = token;
-  _chatId = String(chatId);
+  _chatId = String(chatId).split(',').map(id => id.trim()).filter(id => id);
 }
 
 function _setEnviarFn(fn) { _enviarFn = fn; }
@@ -65,12 +65,15 @@ function _get(metodo, query = '') {
 async function enviar(texto) {
   if (!_token) throw new Error('[telegram] Não inicializado — chame init() primeiro');
   if (_enviarFn) return _enviarFn(texto);
-  const r = await _post('sendMessage', {
-    chat_id:    _chatId,
-    text:       texto,
-    parse_mode: 'HTML',
-  });
-  if (!r.ok) console.error('[telegram] Falha ao enviar:', JSON.stringify(r).slice(0, 200));
+  
+  for (const id of _chatId) {
+    const r = await _post('sendMessage', {
+      chat_id:    id,
+      text:       texto,
+      parse_mode: 'HTML',
+    });
+    if (!r.ok) console.error(`[telegram] Falha ao enviar para ${id}:`, JSON.stringify(r).slice(0, 200));
+  }
 }
 
 function _gerarChave() {

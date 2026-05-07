@@ -456,7 +456,7 @@ git commit -m "feat(telegram): módulo de notificações Telegram com long-polli
 - Create: `comprasgov-browser/agendador.test.js`
 - Create: `comprasgov-browser/agendador.js` (parcial — só buildDetalhes e deduplicação)
 
-- [ ] **Step 1: Criar agendador.test.js**
+- [x] **Step 1: Criar agendador.test.js**
 
 Criar `comprasgov-browser/agendador.test.js`:
 
@@ -567,7 +567,7 @@ test('ehMensagemUrgente retorna false quando CNPJ_RAFAEL vazio', () => {
 });
 ```
 
-- [ ] **Step 2: Rodar testes — devem falhar (agendador.js não existe)**
+- [x] **Step 2: Rodar testes — devem falhar (agendador.js não existe)**
 
 ```bash
 node --test agendador.test.js
@@ -575,7 +575,7 @@ node --test agendador.test.js
 
 Saída esperada: erro `Cannot find module './agendador'`
 
-- [ ] **Step 3: Criar agendador.js com as funções puras**
+- [x] **Step 3: Criar agendador.js com as funções puras**
 
 Criar `comprasgov-browser/agendador.js`:
 
@@ -865,7 +865,7 @@ git commit -m "feat(agendador): jobs cron de scraping e polling com deduplicaç�
 **Files:**
 - Modify: `server.js` (linhas 1-17 e após bootBrowser, e endpoint /status)
 
-- [ ] **Step 1: Adicionar dotenv no topo do server.js**
+- [x] **Step 1: Adicionar dotenv no topo do server.js**
 
 Inserir como **primeira linha** do `server.js` (antes de qualquer require):
 
@@ -873,7 +873,7 @@ Inserir como **primeira linha** do `server.js` (antes de qualquer require):
 require('dotenv').config();
 ```
 
-- [ ] **Step 2: Adicionar requires de telegram e agendador no server.js**
+- [x] **Step 2: Adicionar requires de telegram e agendador no server.js**
 
 Após as linhas de require existentes (após linha `const da = require('./dadosabertos-api');`), adicionar:
 
@@ -882,7 +882,7 @@ const telegram  = require('./telegram');
 const agendador = require('./agendador');
 ```
 
-- [ ] **Step 3: Atualizar endpoint GET /status para incluir agendadorAtivo**
+- [x] **Step 3: Atualizar endpoint GET /status para incluir agendadorAtivo**
 
 Substituir o handler do `/status`:
 
@@ -898,7 +898,7 @@ app.get('/status', (req, res) => {
 });
 ```
 
-- [ ] **Step 4: Inicializar telegram e agendador após bootBrowser**
+- [x] **Step 4: Inicializar telegram e agendador após bootBrowser**
 
 No bloco `(async () => { ... })()`, substituir:
 
@@ -947,7 +947,7 @@ Por:
 });
 ```
 
-- [ ] **Step 5: Testar boot SEM .env (agendador deve ser desabilitado sem crash)**
+- [x] **Step 5: Testar boot SEM .env (agendador deve ser desabilitado sem crash)**
 
 ```bash
 cd comprasgov-browser
@@ -971,7 +971,7 @@ mv .env.bak .env
 kill %1
 ```
 
-- [ ] **Step 6: Testar boot COM .env (agendador deve inicializar)**
+- [x] **Step 6: Testar boot COM .env (agendador deve inicializar)**
 
 ```bash
 node server.js &
@@ -990,7 +990,7 @@ Console deve conter: `[boot] Telegram + agendador inicializados.`
 kill %1
 ```
 
-- [ ] **Step 7: Rodar todos os testes**
+- [x] **Step 7: Rodar todos os testes**
 
 ```bash
 node --test comprasgov.test.js telegram.test.js agendador.test.js
@@ -998,7 +998,7 @@ node --test comprasgov.test.js telegram.test.js agendador.test.js
 
 Saída esperada: todos os testes passando (13 total).
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add server.js

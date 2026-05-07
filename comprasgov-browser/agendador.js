@@ -17,7 +17,7 @@ const { compararSnapshots }         = require('./comparar-snapshots');
 
 // ─── Configuração via .env ───────────────────────────────────────────────────
 
-const CNPJ_RAFAEL   = (process.env.CNPJ_RAFAEL   || '').replace(/\D/g, '');
+const CNPJS_RAFAEL = (process.env.CNPJ_RAFAEL || '').split(',').map(c => c.replace(/\D/g, '')).filter(c => c);
 const HORA_SCRAPING = parseInt(process.env.HORA_SCRAPING || '7', 10);
 const SNAPSHOTS_DIR = path.join(__dirname, 'dados', 'snapshots');
 
@@ -38,9 +38,10 @@ function gerarChaveMensagem(msg) {
   return `${msg.remetente}|${msg.dataHora}|${txt}`;
 }
 
-function ehMensagemUrgente(texto, cnpjRafael) {
-  if (!cnpjRafael) return false;
-  return String(texto).includes(cnpjRafael);
+function ehMensagemUrgente(texto, cnpjs) {
+  if (!cnpjs || cnpjs.length === 0) return false;
+  const txt = String(texto).toUpperCase();
+  return cnpjs.some(cnpj => txt.includes(cnpj));
 }
 
 function buildDetalhes(compraId, mudancas, dataAnterior, dataAtual) {
@@ -178,7 +179,7 @@ async function _compararENotificar(compraId) {
 // ─── Job 2: Polling mensagens do pregoeiro ───────────────────────────────────
 
 async function jobMensagensPregoeiro() {
-  if (!SEL_MSG.campoChatUasg) {
+  if (!SEL_MSG.urlChat) {
     log('[agendador] SEL_MSG não configurado — polling de mensagens pulado.');
     return;
   }
@@ -192,9 +193,13 @@ async function jobMensagensPregoeiro() {
   for (const alvo of alvos) {
     const { compraId, uasg, numero } = alvo;
     try {
-      const { mensagens } = await lerMensagensChat(pageSessao, uasg, numero);
+      const { mensagens } = await lerMensagensChat(pageSessao, compraId);
 
-      if (!mensagensVistas.has(compraId)) mensagensVistas.set(compraId, new Set());
+      let isFirstRun = false;
+      if (!mensagensVistas.has(compraId)) {
+        mensagensVistas.set(compraId, new Set());
+        isFirstRun = true; // Se é a primeira vez rodando, não vamos espamar o Telegram
+      }
       const vistas = mensagensVistas.get(compraId);
 
       for (const msg of mensagens) {
@@ -202,8 +207,11 @@ async function jobMensagensPregoeiro() {
         if (vistas.has(chave)) continue;
         vistas.add(chave);
 
-        const urgente = ehMensagemUrgente(msg.texto, CNPJ_RAFAEL);
-        await _telegram.notificarPregoeiro(compraId, uasg, msg.item || '?', msg.texto, urgente);
+        // Só notifica se NÃO for a primeira rodada (assim pegamos apenas mensagens realmente NOVAS)
+        if (!isFirstRun) {
+          const urgente = ehMensagemUrgente(msg.texto, CNPJS_RAFAEL);
+          await _telegram.notificarPregoeiro(compraId, uasg, msg.item || '?', msg.texto, urgente);
+        }
       }
     } catch (err) {
       log(`[agendador] Erro ao ler mensagens de ${compraId}: ${err.message}`);

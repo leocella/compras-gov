@@ -82,7 +82,7 @@ test('gerarChaveMensagem difere para mensagens diferentes', () => {
 test('ehMensagemUrgente detecta CNPJ no texto', () => {
   const { ehMensagemUrgente } = loadFresh();
   assert.strictEqual(
-    ehMensagemUrgente('Empresa 12345678000190 por favor informe a marca', '12345678000190'),
+    ehMensagemUrgente('Empresa 12345678000190 por favor informe a marca', ['12345678000190']),
     true
   );
 });
@@ -90,15 +90,15 @@ test('ehMensagemUrgente detecta CNPJ no texto', () => {
 test('ehMensagemUrgente retorna false quando CNPJ ausente', () => {
   const { ehMensagemUrgente } = loadFresh();
   assert.strictEqual(
-    ehMensagemUrgente('Por favor informe a marca do item 3', '12345678000190'),
+    ehMensagemUrgente('Por favor informe a marca do item 3', ['12345678000190']),
     false
   );
 });
 
-test('ehMensagemUrgente retorna false quando CNPJ_RAFAEL vazio', () => {
+test('ehMensagemUrgente retorna false quando lista vazia', () => {
   const { ehMensagemUrgente } = loadFresh();
   assert.strictEqual(
-    ehMensagemUrgente('qualquer texto', ''),
+    ehMensagemUrgente('qualquer texto', []),
     false
   );
 });

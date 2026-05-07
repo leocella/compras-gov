@@ -23,24 +23,12 @@ const SEL = {
 //   Procedure: POST /sessao/iniciar → logar → GET /screenshot → inspecionar HTML.
 // ---------------------------------------------------------------------------
 const SEL_MSG = {
-  // URL base do chat de mensagens do fornecedor (⚠️ confirmar após login)
-  urlChat: 'https://www.comprasnet.gov.br/livre/fornecedor/mensagem/consultarMensagemFornecedor.asp',
-
-  // Formulário de busca de mensagens
-  campoChatUasg:   'input[name="co_uasg"], input[id="co_uasg"]',         // ⚠️ RECON
-  campoChatNumero: 'input[name="numprp"], input[id="numprp"]',            // ⚠️ RECON
-  botaoChatBuscar: 'input[type="submit"][value*="Consultar"], input[type="submit"][value*="Buscar"]', // ⚠️ RECON
-
-  // Tabela de mensagens
-  linhasMensagens: 'table.tabela-resultado tbody tr, #tabelaMensagens tbody tr', // ⚠️ RECON
-  colMsgRemetente: 'td:nth-child(1)',                                     // ⚠️ RECON
-  colMsgDataHora:  'td:nth-child(2)',                                     // ⚠️ RECON
-  colMsgTexto:     'td:nth-child(3)',                                     // ⚠️ RECON
-
-  // Resposta
-  linkResponder:  'a:has-text("Responder"), input[value*="Responder"]',   // ⚠️ RECON
-  campoResposta:  'textarea[name*="msg"], textarea[name*="texto"], textarea[id*="resposta"]', // ⚠️ RECON
-  botaoEnviar:    'input[type="submit"][value*="Enviar"], button:has-text("Enviar")', // ⚠️ RECON
+  urlChat: 'https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/acompanhamento-compra?compra=',
+  botaoChatAbrir: '.icones-mensagens, app-botao-mensagens-da-compra',
+  linhasMensagens: '.mensagem-card',
+  colMsgRemetente: '.mensagens-remetente',
+  colMsgDataHora: '.mensagens-data',
+  colMsgTexto: '.mensagens-texto',
 };
 
 // ---------------------------------------------------------------------------
@@ -150,36 +138,40 @@ async function rasparItensPregao(page, uasg, numeroPregao, startUrl) {
 // lerMensagensChat — requer sessão logada
 // ⚠️ Seletores em SEL_MSG precisam de recon ao vivo para funcionar
 // ---------------------------------------------------------------------------
-async function lerMensagensChat(page, uasg, numeroPregao) {
-  await page.goto(SEL_MSG.urlChat, { waitUntil: 'domcontentloaded', timeout: 30_000 });
-  await page.waitForLoadState('networkidle');
+async function lerMensagensChat(page, compraId) {
+  const targetUrl = SEL_MSG.urlChat + compraId;
+  
+  if (!page.url().includes(compraId)) {
+    await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+    await page.waitForTimeout(5000); // Aguardar o SPA carregar
+  }
 
   if (page.url().includes('login')) {
     throw new Error('Sessão expirada — faça login via POST /sessao/iniciar');
   }
 
-  try {
-    await page.fill(SEL_MSG.campoChatUasg, String(uasg));
-    await page.fill(SEL_MSG.campoChatNumero, String(numeroPregao));
-    await page.click(SEL_MSG.botaoChatBuscar);
-    await page.waitForLoadState('networkidle');
-  } catch (e) {
-    throw new Error(
-      `Seletores do chat precisam de recon (⚠️). ` +
-      `Use GET /screenshot para ver o estado da página. ` +
-      `Erro: ${e.message}`
-    );
+  // Se não houver mensagens visíveis, tenta clicar no botão
+  const domHasCards = await page.$eval('body', el => el.innerHTML.includes('mensagem-card')).catch(() => false);
+  if (!domHasCards) {
+    const btnIcon = await page.$(SEL_MSG.botaoChatAbrir);
+    if (btnIcon) {
+      await btnIcon.click({ force: true });
+      await page.waitForTimeout(3000);
+    } else {
+      // Se não tem botão e não tem cards, retorna vazio
+      return { mensagens: [], url: page.url(), total: 0 };
+    }
   }
 
-  const mensagens = await page.$$eval(SEL_MSG.linhasMensagens, (rows, sel) => {
-    const txt = (el, q) => { const n = el.querySelector(q); return n ? n.textContent.trim() : ''; };
-    return rows
-      .map((r) => ({
-        remetente: txt(r, sel.colMsgRemetente),
-        dataHora:  txt(r, sel.colMsgDataHora),
-        texto:     txt(r, sel.colMsgTexto),
-      }))
-      .filter((m) => m.texto);
+  const mensagens = await page.$$eval(SEL_MSG.linhasMensagens, (cards, sel) => {
+    return cards.map(c => {
+      const header = c.querySelector('.cabecalho-mensagem');
+      const remetente = header ? (header.querySelector(sel.colMsgRemetente)?.innerText?.trim() || '') : '';
+      const dataHora = c.querySelector(sel.colMsgDataHora)?.innerText?.trim() || '';
+      const textoElem = c.querySelector(sel.colMsgTexto);
+      const texto = textoElem ? textoElem.innerText?.trim() : c.innerText?.trim();
+      return { remetente, dataHora, texto };
+    }).filter(m => m.texto);
   }, SEL_MSG);
 
   return { mensagens, url: page.url(), total: mensagens.length };
