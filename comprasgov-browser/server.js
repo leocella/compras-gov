@@ -65,6 +65,13 @@ async function shutdown(signal) {
 const app = express();
 app.use(express.json());
 
+app.use((req, res, next) => {
+  if (req.path === '/events') return next(); // /events tem auth própria via ?key=
+  if (req.headers['x-api-key'] !== process.env.API_KEY)
+    return res.status(401).json({ erro: 'Não autorizado' });
+  next();
+});
+
 app.get('/status', (req, res) => {
   res.json({
     online:          true,
