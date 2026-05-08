@@ -709,6 +709,7 @@ app.post('/pregao/propostas', async (req, res) => {
         getPage:        () => page,
         getPageSessao:  () => pageSessao,
         comprasAlvoPath: path.join(__dirname, 'compras-alvo.json'),
+        bus,
       });
       console.log('[boot] Telegram + agendador inicializados.');
     } catch (err) {
