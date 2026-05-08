@@ -16,6 +16,10 @@ const da     = require('./dadosabertos-api');
 const telegram  = require('./telegram');
 const agendador = require('./agendador');
 
+const EventEmitter = require('events');
+const bus = new EventEmitter();
+bus.setMaxListeners(50); // suportar múltiplos clientes SSE simultâneos
+
 const PORT      = parseInt(process.env.PORT || '3099', 10);
 const START_URL = process.env.START_URL || 'https://www.comprasnet.gov.br';
 const HEADLESS  = (process.env.HEADLESS || 'false').toLowerCase() === 'true';
@@ -93,6 +97,34 @@ app.get('/api/compras-alvo', (req, res) => {
   } catch (err) {
     res.status(500).json({ erro: 'Erro ao ler compras-alvo.json: ' + err.message });
   }
+});
+
+app.get('/events', (req, res) => {
+  const key = req.query.key || req.headers['x-api-key'];
+  if (key !== process.env.API_KEY) return res.status(401).end();
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+
+  const send = (event, data) =>
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+
+  const handlers = {
+    mudanca_detectada:  d => send('mudanca_detectada', d),
+    mensagem_pregoeiro: d => send('mensagem_pregoeiro', d),
+    scraping_inicio:    d => send('scraping_inicio', d),
+    scraping_fim:       d => send('scraping_fim', d),
+  };
+
+  Object.entries(handlers).forEach(([e, h]) => bus.on(e, h));
+  const hb = setInterval(() => send('heartbeat', { ts: Date.now() }), 30_000);
+
+  req.on('close', () => {
+    Object.entries(handlers).forEach(([e, h]) => bus.off(e, h));
+    clearInterval(hb);
+  });
 });
 
 app.get('/screenshot', async (req, res) => {
