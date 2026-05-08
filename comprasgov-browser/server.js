@@ -637,23 +637,23 @@ app.post('/mensagens/ler', async (req, res) => {
 
 /**
  * POST /mensagens/responder
- * Body: { uasg, numeroPregao, texto }
- * Envia uma resposta no chat de um pregão.
+ * Body: { compraId, texto, dryRun? }
+ * Envia (ou só preenche, em dry-run) uma resposta no chat de um pregão.
+ * Em dry-run o texto é digitado mas não submetido — usuário valida via VNC.
  * ⚠️ Seletores em SEL_MSG precisam de recon ao vivo.
  */
 app.post('/mensagens/responder', async (req, res) => {
-  const { uasg, numeroPregao, texto } = req.body || {};
-  if (!uasg)         return res.status(400).json({ erro: 'campo "uasg" obrigatório' });
-  if (!numeroPregao) return res.status(400).json({ erro: 'campo "numeroPregao" obrigatório' });
-  if (!texto)        return res.status(400).json({ erro: 'campo "texto" obrigatório' });
-  if (!pageSessao)   return res.status(401).json({ erro: 'Sem sessão ativa — chame POST /sessao/iniciar primeiro' });
+  const { compraId, texto, dryRun } = req.body || {};
+  if (!compraId)   return res.status(400).json({ erro: 'campo "compraId" obrigatório' });
+  if (!texto)      return res.status(400).json({ erro: 'campo "texto" obrigatório' });
+  if (!pageSessao) return res.status(401).json({ erro: 'Sem sessão ativa — chame POST /sessao/iniciar primeiro' });
 
   if (busy) return res.status(409).json({ erro: 'ocupado' });
   busy = true;
 
   try {
-    const resultado = await responderMensagem(pageSessao, uasg, numeroPregao, texto);
-    res.json({ sucesso: true, uasg: String(uasg), numeroPregao: String(numeroPregao), texto, ...resultado });
+    const resultado = await responderMensagem(pageSessao, compraId, texto, { dryRun });
+    res.json({ sucesso: true, compraId: String(compraId), texto, ...resultado });
   } catch (err) {
     console.error('[mensagens/responder]', err.message);
     res.status(500).json({ sucesso: false, erro: err.message });
@@ -703,6 +703,12 @@ app.post('/pregao/propostas', async (req, res) => {
   if (process.env.TELEGRAM_TOKEN) {
     try {
       telegram.init(process.env.TELEGRAM_TOKEN, process.env.TELEGRAM_CHAT_ID);
+      telegram.setResponderCallback(async (ctx, texto) => {
+        if (!pageSessao) {
+          throw new Error('Sessão pageSessao não ativa — chame POST /sessao/iniciar primeiro');
+        }
+        return responderMensagem(pageSessao, ctx.compraId, texto);
+      });
       telegram.iniciarPolling();
       agendador.init({
         telegram,
@@ -711,7 +717,8 @@ app.post('/pregao/propostas', async (req, res) => {
         comprasAlvoPath: path.join(__dirname, 'compras-alvo.json'),
         bus,
       });
-      console.log('[boot] Telegram + agendador inicializados.');
+      const dryRun = process.env.TELEGRAM_RESPONDER_DRY_RUN === 'true';
+      console.log(`[boot] Telegram + agendador inicializados. Responder pregoeiro: ${dryRun ? 'DRY-RUN (seguro)' : 'AUTO (envia direto)'}`);
     } catch (err) {
       console.error('[boot] Telegram desabilitado:', err.message);
     }

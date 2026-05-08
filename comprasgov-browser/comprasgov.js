@@ -29,6 +29,11 @@ const SEL_MSG = {
   colMsgRemetente: '.mensagens-remetente',
   colMsgDataHora: '.mensagens-data',
   colMsgTexto: '.mensagens-texto',
+  // Selectors do form de resposta — pendentes de reconhecimento manual.
+  // Roteiro em scripts/recon-seletores-resposta.md.
+  linkResponder: '',  // botão/link que abre o form de resposta
+  campoResposta: '',  // textarea de input
+  botaoEnviar:   '',  // botão final de submissão
 };
 
 // ---------------------------------------------------------------------------
@@ -178,24 +183,65 @@ async function lerMensagensChat(page, compraId) {
 }
 
 // ---------------------------------------------------------------------------
-// responderMensagem — requer sessão logada
-// ⚠️ Seletores em SEL_MSG precisam de recon ao vivo para funcionar
+// responderMensagem — envia (ou só preenche, em dry-run) resposta ao pregoeiro
+//
+// Em dry-run, o texto é digitado no campo mas NUNCA é submetido — o usuário
+// revisa via VNC e clica enviar manualmente. Default vem de
+// process.env.TELEGRAM_RESPONDER_DRY_RUN.
+//
+// Toda invocação é registrada em dados/respostas-pregoeiro.log para auditoria
+// (chat com órgão público).
 // ---------------------------------------------------------------------------
-async function responderMensagem(page, uasg, numeroPregao, texto) {
-  await lerMensagensChat(page, uasg, numeroPregao);
+const fs   = require('fs');
+const path = require('path');
+const LOG_RESPOSTAS = path.join(__dirname, 'dados', 'respostas-pregoeiro.log');
+
+function _logResposta(entrada) {
+  try {
+    fs.mkdirSync(path.dirname(LOG_RESPOSTAS), { recursive: true });
+    fs.appendFileSync(
+      LOG_RESPOSTAS,
+      JSON.stringify({ ts: new Date().toISOString(), ...entrada }) + '\n',
+    );
+  } catch (e) {
+    console.error('[responderMensagem] Falha ao logar:', e.message);
+  }
+}
+
+async function responderMensagem(page, compraId, texto, opts = {}) {
+  if (!compraId) throw new Error('responderMensagem: compraId obrigatório');
+  if (!texto)    throw new Error('responderMensagem: texto obrigatório');
+
+  const dryRun = opts.dryRun ?? (process.env.TELEGRAM_RESPONDER_DRY_RUN === 'true');
+
+  if (!SEL_MSG.linkResponder || !SEL_MSG.campoResposta || !SEL_MSG.botaoEnviar) {
+    const erro = 'SEL_MSG do form de resposta não configurado — execute o recon (scripts/recon-seletores-resposta.md)';
+    _logResposta({ compraId, texto, modo: dryRun ? 'dry-run' : 'auto', erro });
+    throw new Error(erro);
+  }
+
+  await lerMensagensChat(page, compraId);
 
   try {
     await page.click(SEL_MSG.linkResponder);
     await page.waitForLoadState('domcontentloaded');
     await page.fill(SEL_MSG.campoResposta, texto);
+
+    if (dryRun) {
+      _logResposta({ compraId, texto, modo: 'dry-run', preenchido: true });
+      return { sucesso: true, modo: 'dry-run', preenchido: true, enviadoEm: null, url: page.url() };
+    }
+
     await page.click(SEL_MSG.botaoEnviar);
     await page.waitForLoadState('networkidle');
-    return { enviado: true, url: page.url() };
+    const enviadoEm = new Date().toISOString();
+    _logResposta({ compraId, texto, modo: 'auto', enviadoEm });
+    return { sucesso: true, modo: 'auto', enviadoEm, url: page.url() };
   } catch (e) {
+    _logResposta({ compraId, texto, modo: dryRun ? 'dry-run' : 'auto', erro: e.message });
     throw new Error(
-      `Erro ao responder (⚠️ seletores precisam de recon). ` +
-      `Use GET /screenshot para inspecionar. ` +
-      `Erro: ${e.message}`
+      `Erro ao ${dryRun ? 'preencher' : 'enviar'} resposta. ` +
+      `Use GET /screenshot para inspecionar. Erro: ${e.message}`,
     );
   }
 }

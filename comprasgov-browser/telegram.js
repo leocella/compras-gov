@@ -8,6 +8,21 @@ let _polling = false;
 let _ultimoUpdateId = 0;
 const _detalhesMap = new Map();
 
+// Mapeia message_id de notificação do pregoeiro -> contexto da compra,
+// para que respostas via reply-to-message saibam para qual pregão enviar.
+// LRU simples: limitado a MAX_CONTEXTO entradas.
+const _pregoeiroContexto = new Map();
+const MAX_CONTEXTO = 200;
+
+// Mapeia callbackId (8 chars) -> {compraId, uasg, item, texto, previewMsgId},
+// usado pelo fluxo de confirmação com inline keyboard.
+const _pendentesConfirmacao = new Map();
+
+// Callback injetado pelo server.js para executar o envio ao pregoeiro
+// quando o usuário confirma via Telegram. Recebe (ctx, texto) e
+// retorna o resultado da chamada a responderMensagem.
+let _onResponderPregoeiro = null;
+
 // Permite monkey-patch nos testes
 let _enviarFn = null;
 
@@ -19,6 +34,17 @@ function init(token, chatId) {
 }
 
 function _setEnviarFn(fn) { _enviarFn = fn; }
+
+function setResponderCallback(fn) { _onResponderPregoeiro = fn; }
+
+function _registrarContextoPregoeiro(messageId, ctx) {
+  if (!messageId) return;
+  if (_pregoeiroContexto.size >= MAX_CONTEXTO) {
+    const primeira = _pregoeiroContexto.keys().next().value;
+    _pregoeiroContexto.delete(primeira);
+  }
+  _pregoeiroContexto.set(messageId, ctx);
+}
 
 function _post(metodo, payload) {
   return new Promise((resolve, reject) => {
@@ -62,18 +88,29 @@ function _get(metodo, query = '') {
   });
 }
 
-async function enviar(texto) {
+async function enviar(texto, opts = {}) {
   if (!_token) throw new Error('[telegram] Não inicializado — chame init() primeiro');
-  if (_enviarFn) return _enviarFn(texto);
-  
+  if (_enviarFn) return _enviarFn(texto, opts);
+
+  let primeiroMessageId = null;
+
   for (const id of _chatId) {
-    const r = await _post('sendMessage', {
+    const payload = {
       chat_id:    id,
       text:       texto,
       parse_mode: 'HTML',
-    });
-    if (!r.ok) console.error(`[telegram] Falha ao enviar para ${id}:`, JSON.stringify(r).slice(0, 200));
+    };
+    if (opts.reply_markup) payload.reply_markup = opts.reply_markup;
+
+    const r = await _post('sendMessage', payload);
+    if (!r.ok) {
+      console.error(`[telegram] Falha ao enviar para ${id}:`, JSON.stringify(r).slice(0, 200));
+    } else if (primeiroMessageId === null) {
+      primeiroMessageId = r.result?.message_id ?? null;
+    }
   }
+
+  return primeiroMessageId;
 }
 
 function _gerarChave() {
@@ -102,18 +139,22 @@ async function notificarMudancas(compraId, resumo, detalhes) {
 }
 
 async function notificarPregoeiro(compraId, uasg, numItem, texto, urgente = false) {
+  let messageId;
+
   if (urgente) {
     const limite = new Date();
     limite.setMinutes(limite.getMinutes() + 2);
     const hhmm = limite.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 
-    await enviar([
+    messageId = await enviar([
       `🚨 <b>CHAMADA DIRETA — 2 MIN PARA RESPONDER</b>`,
       `Compra ${compraId} / Item ${numItem}`,
       ``,
       texto,
       ``,
       `⏰ Responda até: ${hhmm}`,
+      ``,
+      `<i>Responda essa mensagem com o texto da resposta para enviar ao pregoeiro.</i>`,
     ].join('\n'));
 
     setTimeout(async () => {
@@ -125,12 +166,16 @@ async function notificarPregoeiro(compraId, uasg, numItem, texto, urgente = fals
     }, 90_000);
 
   } else {
-    await enviar([
+    messageId = await enviar([
       `💬 <b>Pregoeiro</b> — Compra ${compraId} / Item ${numItem}`,
       ``,
       texto,
+      ``,
+      `<i>Responda essa mensagem para enviar resposta ao pregoeiro.</i>`,
     ].join('\n'));
   }
+
+  _registrarContextoPregoeiro(messageId, { compraId, uasg, item: numItem });
 }
 
 async function _responderChave(chave) {
@@ -138,6 +183,132 @@ async function _responderChave(chave) {
   const detalhe = _detalhesMap.get(chave);
   _detalhesMap.delete(chave);
   return detalhe;
+}
+
+function _gerarCallbackId() {
+  // 8 chars hex, suficiente para evitar colisão dentro da janela de pendentes
+  return Math.random().toString(16).slice(2, 10).padStart(8, '0').toUpperCase();
+}
+
+function _formatarPreview(ctx, texto) {
+  const dryRun = process.env.TELEGRAM_RESPONDER_DRY_RUN === 'true';
+  const modoTag = dryRun
+    ? '🧪 <b>MODO TESTE (dry-run)</b> — só escreve no form, você clica enviar via VNC'
+    : '⚠️ <b>MODO AUTO</b> — confirmando, será enviado direto ao pregoeiro';
+
+  return [
+    `📝 <b>Confirmar envio?</b>`,
+    modoTag,
+    ``,
+    `Para: Compra ${ctx.compraId} / Item ${ctx.item}`,
+    `Texto: ${texto}`,
+  ].join('\n');
+}
+
+async function _editarMensagem(chatId, messageId, novoTexto) {
+  if (!chatId || !messageId) return;
+  await _post('editMessageText', {
+    chat_id:    chatId,
+    message_id: messageId,
+    text:       novoTexto,
+    parse_mode: 'HTML',
+  });
+}
+
+async function _solicitarConfirmacao(ctx, texto, chatId) {
+  const callbackId = _gerarCallbackId();
+  _pendentesConfirmacao.set(callbackId, { ...ctx, texto, previewMsgId: null, chatId });
+
+  const r = await _post('sendMessage', {
+    chat_id:    chatId,
+    text:       _formatarPreview(ctx, texto),
+    parse_mode: 'HTML',
+    reply_markup: {
+      inline_keyboard: [[
+        { text: '✅ Confirmar', callback_data: `c:${callbackId}` },
+        { text: '❌ Cancelar',  callback_data: `x:${callbackId}` },
+      ]],
+    },
+  });
+
+  if (r.ok) {
+    const pendente = _pendentesConfirmacao.get(callbackId);
+    if (pendente) pendente.previewMsgId = r.result.message_id;
+  } else {
+    _pendentesConfirmacao.delete(callbackId);
+    console.error('[telegram] Falha ao enviar preview:', JSON.stringify(r).slice(0, 200));
+  }
+}
+
+async function _processarCallbackQuery(cb) {
+  const data = cb.data || '';
+  const sep  = data.indexOf(':');
+  if (sep < 0) {
+    await _post('answerCallbackQuery', { callback_query_id: cb.id });
+    return;
+  }
+  const acao       = data.slice(0, sep);
+  const callbackId = data.slice(sep + 1);
+
+  const pendente = _pendentesConfirmacao.get(callbackId);
+  if (!pendente) {
+    await _post('answerCallbackQuery', { callback_query_id: cb.id, text: 'Pedido expirou' });
+    return;
+  }
+  _pendentesConfirmacao.delete(callbackId);
+
+  const chatId    = cb.message?.chat?.id ?? pendente.chatId;
+  const previewId = pendente.previewMsgId;
+
+  if (acao === 'x') {
+    await _editarMensagem(chatId, previewId, '❌ Cancelado');
+    await _post('answerCallbackQuery', { callback_query_id: cb.id });
+    return;
+  }
+
+  if (acao !== 'c') {
+    await _post('answerCallbackQuery', { callback_query_id: cb.id });
+    return;
+  }
+
+  await _post('answerCallbackQuery', { callback_query_id: cb.id, text: 'Enviando...' });
+
+  if (!_onResponderPregoeiro) {
+    await _editarMensagem(chatId, previewId, '❌ Erro: callback de envio não configurado');
+    return;
+  }
+
+  try {
+    const resultado = await _onResponderPregoeiro(
+      { compraId: pendente.compraId, uasg: pendente.uasg, item: pendente.item },
+      pendente.texto,
+    );
+    const hhmm = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    const modo = resultado?.modo === 'dry-run'
+      ? `✅ Preenchido (dry-run) às ${hhmm} — revise e envie via VNC`
+      : `✅ Enviado às ${hhmm}`;
+    await _editarMensagem(chatId, previewId, modo);
+  } catch (err) {
+    console.error('[telegram] Erro ao executar envio:', err.message);
+    await _editarMensagem(chatId, previewId, `❌ Erro: ${err.message}`);
+  }
+}
+
+async function _processarSlashResponder(texto, chatId) {
+  const m = texto.match(/^\/responder\s+(\S+)\s+([\s\S]+)$/);
+  if (!m) {
+    await _post('sendMessage', {
+      chat_id: chatId,
+      text:    'Uso: /responder <compraId> <texto>',
+    });
+    return;
+  }
+  const [, compraId, respTexto] = m;
+  await _solicitarConfirmacao(
+    { compraId, uasg: '?', item: '?' },
+    respTexto.trim(),
+    chatId,
+  );
 }
 
 async function iniciarPolling() {
@@ -148,14 +319,39 @@ async function iniciarPolling() {
   const loop = async () => {
     while (_polling) {
       try {
-        const r = await _get('getUpdates', `?timeout=25&offset=${_ultimoUpdateId + 1}`);
+        const r = await _get('getUpdates', `?timeout=25&offset=${_ultimoUpdateId + 1}&allowed_updates=${encodeURIComponent('["message","callback_query","channel_post"]')}`);
         if (r.ok && r.result && r.result.length > 0) {
           for (const update of r.result) {
             _ultimoUpdateId = update.update_id;
+
+            // 1) Botão inline pressionado (confirmar/cancelar)
+            if (update.callback_query) {
+              await _processarCallbackQuery(update.callback_query);
+              continue;
+            }
+
             const msg = update.message || update.channel_post;
             if (!msg || !msg.text) continue;
 
-            const chave = msg.text.trim().toUpperCase();
+            const texto = msg.text.trim();
+            const chatId = msg.chat?.id;
+
+            // 2) Slash command /responder <compraId> <texto>
+            if (texto.startsWith('/responder ') || texto === '/responder') {
+              await _processarSlashResponder(texto, chatId);
+              continue;
+            }
+
+            // 3) Reply em mensagem do bot (notificação de pregoeiro)
+            const replyId = msg.reply_to_message?.message_id;
+            if (replyId && _pregoeiroContexto.has(replyId)) {
+              const ctx = _pregoeiroContexto.get(replyId);
+              await _solicitarConfirmacao(ctx, texto, chatId);
+              continue;
+            }
+
+            // 4) Chave de detalhe (comportamento existente)
+            const chave = texto.toUpperCase();
             const detalhe = await _responderChave(chave);
             if (detalhe) {
               await enviar(detalhe);
@@ -181,7 +377,16 @@ module.exports = {
   notificarPregoeiro,
   iniciarPolling,
   pararPolling,
+  setResponderCallback,
   // internos expostos para testes
   _setEnviarFn,
   _responderChave,
+  _registrarContextoPregoeiro,
+  _processarSlashResponder,
+  _processarCallbackQuery,
+  _solicitarConfirmacao,
+  _formatarPreview,
+  _gerarCallbackId,
+  _pregoeiroContexto,
+  _pendentesConfirmacao,
 };

@@ -57,3 +57,78 @@ test('_responderChave retorna null para chave inexistente', async () => {
   const r = await t._responderChave('XXXX');
   assert.strictEqual(r, null);
 });
+
+// ─── Responder pregoeiro via Telegram ────────────────────────────────────────
+
+test('_gerarCallbackId produz 8 chars hex maiúsculos', () => {
+  const t = loadFresh();
+  for (let i = 0; i < 50; i++) {
+    const id = t._gerarCallbackId();
+    assert.match(id, /^[0-9A-F]{8}$/, `id "${id}" não é 8 hex maiúsculo`);
+  }
+});
+
+test('_formatarPreview inclui MODO TESTE em dry-run', () => {
+  const t = loadFresh();
+  process.env.TELEGRAM_RESPONDER_DRY_RUN = 'true';
+  const ctx = { compraId: '12345', uasg: '158383', item: '7' };
+  const preview = t._formatarPreview(ctx, 'minha resposta');
+  assert.ok(preview.includes('MODO TESTE'), 'tag de dry-run ausente');
+  assert.ok(preview.includes('12345'), 'compraId ausente');
+  assert.ok(preview.includes('7'), 'item ausente');
+  assert.ok(preview.includes('minha resposta'), 'texto ausente');
+});
+
+test('_formatarPreview inclui MODO AUTO quando dry-run desligado', () => {
+  const t = loadFresh();
+  process.env.TELEGRAM_RESPONDER_DRY_RUN = 'false';
+  const ctx = { compraId: 'C1', uasg: 'U1', item: '3' };
+  const preview = t._formatarPreview(ctx, 'texto');
+  assert.ok(preview.includes('MODO AUTO'), 'tag de auto ausente');
+  assert.ok(!preview.includes('MODO TESTE'), 'não deveria ter tag de teste');
+});
+
+test('_registrarContextoPregoeiro armazena e respeita limite LRU', () => {
+  const t = loadFresh();
+  // Limpa estado entre testes (módulo recarregado, mapa vazio)
+  for (let i = 0; i < 250; i++) {
+    t._registrarContextoPregoeiro(i, { compraId: `C${i}`, uasg: 'U', item: String(i) });
+  }
+  // Limite é 200 — primeiras 50 entradas (0..49) devem ter sido despejadas
+  assert.strictEqual(t._pregoeiroContexto.size, 200);
+  assert.ok(!t._pregoeiroContexto.has(0), 'entrada antiga deveria ter sido despejada');
+  assert.ok(!t._pregoeiroContexto.has(49), 'entrada antiga deveria ter sido despejada');
+  assert.ok(t._pregoeiroContexto.has(50), 'entrada 50 deveria estar presente');
+  assert.ok(t._pregoeiroContexto.has(249), 'última entrada deveria estar presente');
+});
+
+test('_registrarContextoPregoeiro ignora messageId nulo', () => {
+  const t = loadFresh();
+  const sizeAntes = t._pregoeiroContexto.size;
+  t._registrarContextoPregoeiro(null, { compraId: 'X' });
+  t._registrarContextoPregoeiro(undefined, { compraId: 'X' });
+  assert.strictEqual(t._pregoeiroContexto.size, sizeAntes);
+});
+
+test('notificarPregoeiro registra contexto após enviar', async () => {
+  const t = loadFresh();
+  t.init('tok:abc', '999');
+
+  // Mock que simula retorno do message_id da API Telegram
+  let mockMessageId = 9001;
+  t._setEnviarFn(() => Promise.resolve(mockMessageId++));
+
+  await t.notificarPregoeiro('COMPRA-X', '158383', '5', 'Pergunta do pregoeiro', false);
+
+  assert.ok(t._pregoeiroContexto.has(9001), 'contexto não foi registrado para o message_id retornado');
+  const ctx = t._pregoeiroContexto.get(9001);
+  assert.deepStrictEqual(ctx, { compraId: 'COMPRA-X', uasg: '158383', item: '5' });
+});
+
+test('setResponderCallback armazena a função para uso futuro', () => {
+  const t = loadFresh();
+  let chamado = false;
+  t.setResponderCallback(() => { chamado = true; });
+  // Apenas verificar que não lança erro — execução real é via callback_query
+  assert.strictEqual(chamado, false, 'callback não deve ser invocado só pelo setter');
+});
