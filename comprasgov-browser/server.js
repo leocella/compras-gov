@@ -70,12 +70,16 @@ async function shutdown(signal) {
 const app = express();
 app.use(express.json());
 
+function validarKey(provided) {
+  const key = process.env.API_KEY;
+  if (!key || !provided || provided.length !== key.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(key));
+}
+
 app.use((req, res, next) => {
   if (req.path === '/events') return next(); // /events tem auth própria via ?key=
-  const key      = process.env.API_KEY;
   const provided = req.headers['x-api-key'] || '';
-  if (!key || provided.length !== key.length ||
-      !crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(key)))
+  if (!validarKey(provided))
     return res.status(401).json({ erro: 'Não autorizado' });
   next();
 });
@@ -101,15 +105,18 @@ app.get('/api/compras-alvo', (req, res) => {
 
 app.get('/events', (req, res) => {
   const key = req.query.key || req.headers['x-api-key'];
-  if (key !== process.env.API_KEY) return res.status(401).end();
+  if (!validarKey(key)) return res.status(401).end();
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders();
 
-  const send = (event, data) =>
+  const send = (event, data) => {
+    if (res.writableEnded) return;
     res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
 
   const handlers = {
     mudanca_detectada:  d => send('mudanca_detectada', d),
