@@ -30,14 +30,28 @@ echo "[2/3] Iniciando fluxbox..."
 fluxbox > /var/log/fluxbox.log 2>&1 &
 sleep 1
 
-# Inicia x11vnc
-echo "[3/3] Iniciando x11vnc na porta 5900..."
-x11vnc -display :99 -rfbauth ~/.vnc_pass -forever -shared -bg -o /var/log/x11vnc.log
+# Inicia x11vnc — escuta em 0.0.0.0 para conexões externas (use só para teste)
+echo "[3/3] Iniciando x11vnc na porta 5900 (público)..."
+x11vnc -display :99 -rfbauth ~/.vnc_pass -forever -shared -bg \
+       -listen 0.0.0.0 \
+       -o /var/log/x11vnc.log
+
+# Abre porta 5900 no firewall
+if command -v ufw &> /dev/null; then
+    ufw allow 5900/tcp 2>/dev/null || true
+fi
+
+VPS_IP=$(curl -s ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
 
 echo ""
-echo "VNC pronto na porta 5900."
+echo "==============================================="
+echo "VNC pronto e EXPOSTO publicamente na porta 5900"
+echo "==============================================="
 echo ""
 echo "Para conectar do seu PC:"
-echo "  1. Abra um terminal local e rode: ssh -L 5900:localhost:5900 root@$(hostname -I | awk '{print $1}')"
-echo "  2. Abra um VNC viewer (TightVNC, RealVNC) em: localhost:5900"
+echo "  1. Instale TightVNC Viewer ou RealVNC Viewer"
+echo "  2. Conecte em: $VPS_IP:5900"
 echo "  3. Senha: a que você definiu (default: comprasgov2026)"
+echo ""
+echo "ATENÇÃO: VNC está aberto na internet. Use senha forte."
+echo "Para fechar depois: bash scripts/stop-all.sh"
