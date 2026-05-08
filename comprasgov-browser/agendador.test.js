@@ -102,3 +102,28 @@ test('ehMensagemUrgente retorna false quando lista vazia', () => {
     false
   );
 });
+
+// ─── bus de eventos ──────────────────────────────────────────────────────────
+
+test('init aceita parâmetro bus sem lançar erro', () => {
+  const { init } = loadFresh();
+  const EventEmitter = require('events');
+  const mockBus = new EventEmitter();
+  assert.doesNotThrow(() => init({
+    telegram:        { enviar: () => {}, notificarMudancas: () => {}, notificarPregoeiro: () => {} },
+    getPage:         () => null,
+    getPageSessao:   () => null,
+    comprasAlvoPath: './compras-alvo.json',
+    bus:             mockBus,
+  }));
+});
+
+test('init sem bus não lança erro (bus opcional)', () => {
+  const { init } = loadFresh();
+  assert.doesNotThrow(() => init({
+    telegram:        { enviar: () => {}, notificarMudancas: () => {}, notificarPregoeiro: () => {} },
+    getPage:         () => null,
+    getPageSessao:   () => null,
+    comprasAlvoPath: './compras-alvo.json',
+  }));
+});

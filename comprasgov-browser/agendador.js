@@ -30,6 +30,7 @@ let _telegram;
 let _getPage;
 let _getPageSessao;
 let _comprasAlvoPath;
+let _bus = null;
 
 // ─── Funções puras (exportadas para testes) ──────────────────────────────────
 
@@ -102,6 +103,7 @@ async function jobScrapingDiario() {
     log(`[agendador] Erro ao ler compras-alvo.json: ${err.message}`);
     return;
   }
+  if (_bus) _bus.emit('scraping_inicio', { total: alvos.length });
 
   for (let i = 0; i < alvos.length; i++) {
     const alvo     = alvos[i];
@@ -146,6 +148,7 @@ async function jobScrapingDiario() {
     if (i < alvos.length - 1) await sleep(5000);
   }
 
+  if (_bus) _bus.emit('scraping_fim', { comprasProcessadas: alvos.length });
   log('[agendador] Scraping diário concluído.');
 }
 
@@ -174,6 +177,7 @@ async function _compararENotificar(compraId) {
 
   const detalhes = buildDetalhes(compraId, mudancas, ontem(), hoje());
   await _telegram.notificarMudancas(compraId, resumo, detalhes);
+  if (_bus) _bus.emit('mudanca_detectada', { compraId, ...resumo });
 }
 
 // ─── Job 2: Polling mensagens do pregoeiro ───────────────────────────────────
@@ -211,6 +215,7 @@ async function jobMensagensPregoeiro() {
         if (!isFirstRun) {
           const urgente = ehMensagemUrgente(msg.texto, CNPJS_RAFAEL);
           await _telegram.notificarPregoeiro(compraId, uasg, msg.item || '?', msg.texto, urgente);
+          if (_bus) _bus.emit('mensagem_pregoeiro', { compraId, uasg, item: msg.item || '?', texto: msg.texto, urgente });
         }
       }
     } catch (err) {
@@ -221,11 +226,12 @@ async function jobMensagensPregoeiro() {
 
 // ─── Inicialização ───────────────────────────────────────────────────────────
 
-function init({ telegram, getPage, getPageSessao, comprasAlvoPath }) {
+function init({ telegram, getPage, getPageSessao, comprasAlvoPath, bus }) {
   _telegram        = telegram;
   _getPage         = getPage;
   _getPageSessao   = getPageSessao;
   _comprasAlvoPath = comprasAlvoPath;
+  _bus             = bus || null;
 
   // Job 1: scraping diário
   cron.schedule(`0 ${HORA_SCRAPING} * * *`, jobScrapingDiario, {
