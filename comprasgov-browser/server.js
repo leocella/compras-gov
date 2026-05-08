@@ -86,6 +86,15 @@ app.get('/status', (req, res) => {
   });
 });
 
+app.get('/api/compras-alvo', (req, res) => {
+  try {
+    const alvos = JSON.parse(fs.readFileSync(path.join(__dirname, 'compras-alvo.json'), 'utf8'));
+    res.json(alvos);
+  } catch (err) {
+    res.status(500).json({ erro: 'Erro ao ler compras-alvo.json: ' + err.message });
+  }
+});
+
 app.get('/screenshot', async (req, res) => {
   const alvo = req.query.sessao === '1' ? pageSessao : page;
   if (!alvo) {
