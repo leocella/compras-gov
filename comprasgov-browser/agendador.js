@@ -8,6 +8,7 @@ const {
   navegarParaItemSPA,
   extrairDadosPaginaAtual,
   salvarSnapshot,
+  gerarExcel,
   sleep,
   log,
 } = require('./raspar-propostas-cdp');
@@ -139,7 +140,7 @@ async function jobScrapingDiario() {
       }
 
       salvarSnapshot(resultados, compraId);
-      await _compararENotificar(compraId, resultados);
+      await _compararENotificar(compraId, resultados, alvo);
 
     } catch (err) {
       log(`[agendador] Erro na compra ${compraId}: ${err.message}`);
@@ -152,7 +153,7 @@ async function jobScrapingDiario() {
   log('[agendador] Scraping diário concluído.');
 }
 
-async function _compararENotificar(compraId) {
+async function _compararENotificar(compraId, resultadosHoje, alvo) {
   const arquivoOntem = path.join(SNAPSHOTS_DIR, `snapshot_${compraId}_${ontem()}.json`);
   const arquivoHoje  = path.join(SNAPSHOTS_DIR, `snapshot_${compraId}_${hoje()}.json`);
 
@@ -177,6 +178,18 @@ async function _compararENotificar(compraId) {
 
   const detalhes = buildDetalhes(compraId, mudancas, ontem(), hoje());
   await _telegram.notificarMudancas(compraId, resumo, detalhes);
+
+  // Gera e envia Excel da raspagem do dia (só para compras com mudança)
+  try {
+    const xlsxPath = await gerarExcel(resultadosHoje, compraId);
+    const tipoCompra = alvo?.tipo ? `${alvo.tipo} ${alvo.numero}` : compraId;
+    const caption = `📎 <b>Raspagem ${hoje()}</b> — ${tipoCompra}\n${resumo.totalMudancas} mudança(s) detectada(s)`;
+    await _telegram.enviarDocumento(xlsxPath, caption);
+    log(`[agendador] Excel enviado via Telegram: ${path.basename(xlsxPath)}`);
+  } catch (err) {
+    log(`[agendador] Erro ao gerar/enviar Excel de ${compraId}: ${err.message}`);
+  }
+
   if (_bus) _bus.emit('mudanca_detectada', { compraId, ...resumo });
 }
 

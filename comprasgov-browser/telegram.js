@@ -1,6 +1,8 @@
 'use strict';
 
 const https = require('https');
+const fs    = require('fs');
+const path  = require('path');
 
 let _token  = '';
 let _chatId = [];
@@ -115,6 +117,81 @@ async function enviar(texto, opts = {}) {
 
 function _gerarChave() {
   return Math.random().toString(16).slice(2, 6).toUpperCase().padStart(4, '0');
+}
+
+// ─── Upload de documento (sendDocument, multipart/form-data) ────────────────
+function _postMultipart(metodo, chatId, filePath, caption) {
+  return new Promise((resolve, reject) => {
+    const fileBuf  = fs.readFileSync(filePath);
+    const fileName = path.basename(filePath);
+    const boundary = '----comprasgov' + Date.now().toString(36);
+    const CRLF     = '\r\n';
+
+    const head1 =
+      `--${boundary}${CRLF}` +
+      `Content-Disposition: form-data; name="chat_id"${CRLF}${CRLF}` +
+      `${chatId}${CRLF}`;
+
+    const headCaption = caption ? (
+      `--${boundary}${CRLF}` +
+      `Content-Disposition: form-data; name="caption"${CRLF}${CRLF}` +
+      `${caption}${CRLF}` +
+      `--${boundary}${CRLF}` +
+      `Content-Disposition: form-data; name="parse_mode"${CRLF}${CRLF}` +
+      `HTML${CRLF}`
+    ) : '';
+
+    const headFile =
+      `--${boundary}${CRLF}` +
+      `Content-Disposition: form-data; name="document"; filename="${fileName}"${CRLF}` +
+      `Content-Type: application/octet-stream${CRLF}${CRLF}`;
+
+    const tail = `${CRLF}--${boundary}--${CRLF}`;
+
+    const body = Buffer.concat([
+      Buffer.from(head1, 'utf8'),
+      Buffer.from(headCaption, 'utf8'),
+      Buffer.from(headFile, 'utf8'),
+      fileBuf,
+      Buffer.from(tail, 'utf8'),
+    ]);
+
+    const req = https.request({
+      hostname: 'api.telegram.org',
+      path:     `/bot${_token}/${metodo}`,
+      method:   'POST',
+      headers: {
+        'Content-Type':   `multipart/form-data; boundary=${boundary}`,
+        'Content-Length': body.length,
+      },
+    }, (res) => {
+      let raw = '';
+      res.on('data', c => { raw += c; });
+      res.on('end', () => {
+        try { resolve(JSON.parse(raw)); }
+        catch { resolve({ ok: false, raw }); }
+      });
+    });
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+async function enviarDocumento(filePath, caption) {
+  if (!_token) throw new Error('[telegram] Não inicializado — chame init() primeiro');
+  if (!fs.existsSync(filePath)) throw new Error(`Arquivo não encontrado: ${filePath}`);
+
+  let primeiroMessageId = null;
+  for (const id of _chatId) {
+    const r = await _postMultipart('sendDocument', id, filePath, caption);
+    if (!r.ok) {
+      console.error(`[telegram] Falha sendDocument para ${id}:`, JSON.stringify(r).slice(0, 200));
+    } else if (primeiroMessageId === null) {
+      primeiroMessageId = r.result?.message_id ?? null;
+    }
+  }
+  return primeiroMessageId;
 }
 
 async function notificarMudancas(compraId, resumo, detalhes) {
@@ -373,6 +450,7 @@ function pararPolling() { _polling = false; }
 module.exports = {
   init,
   enviar,
+  enviarDocumento,
   notificarMudancas,
   notificarPregoeiro,
   iniciarPolling,
