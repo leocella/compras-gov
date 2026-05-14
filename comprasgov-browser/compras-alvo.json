@@ -75,5 +75,374 @@
     "numero": "900222026",
     "compraId": "08035605900222026",
     "totalItens": "auto"
+  },
+  {
+    "uasg": "926483",
+    "tipo": "Pregão",
+    "numero": "900182026",
+    "compraId": "92648305900182026",
+    "totalItens": "auto",
+    "_uasg_pendente": true,
+    "_origem": "planilha_leo_2026-05-13"
+  },
+  {
+    "uasg": "158009",
+    "tipo": "Dispensa",
+    "numero": "003422025",
+    "compraId": "15800906003422025",
+    "totalItens": "auto",
+    "_uasg_pendente": true,
+    "_origem": "planilha_leo_2026-05-13"
+  },
+  {
+    "uasg": "160046",
+    "tipo": "Pregão",
+    "numero": "900202025",
+    "compraId": "16004605900202025",
+    "totalItens": "auto",
+    "_uasg_pendente": true,
+    "_origem": "planilha_leo_2026-05-13"
+  },
+  {
+    "uasg": "257040",
+    "tipo": "Pregão",
+    "numero": "900152025",
+    "compraId": "25704005900152025",
+    "totalItens": "auto",
+    "_uasg_pendente": true,
+    "_origem": "planilha_leo_2026-05-13"
+  },
+  {
+    "uasg": "153065",
+    "tipo": "Pregão",
+    "numero": "900342025",
+    "compraId": "15306505900342025",
+    "totalItens": "auto",
+    "_uasg_pendente": true,
+    "_origem": "planilha_leo_2026-05-13"
+  },
+  {
+    "uasg": "158137",
+    "tipo": "Pregão",
+    "numero": "905252025",
+    "compraId": "15813705905252025",
+    "totalItens": "auto",
+    "_uasg_pendente": true,
+    "_origem": "planilha_leo_2026-05-13"
+  },
+  {
+    "uasg": "987565",
+    "tipo": "Pregão",
+    "numero": "900052026",
+    "compraId": "98756505900052026",
+    "totalItens": "auto",
+    "_uasg_pendente": true,
+    "_origem": "planilha_leo_2026-05-13"
+  },
+  {
+    "uasg": "943001",
+    "tipo": "Pregão",
+    "numero": "914022025",
+    "compraId": "94300105914022025",
+    "totalItens": "auto",
+    "_uasg_pendente": true,
+    "_origem": "planilha_leo_2026-05-13"
+  },
+  {
+    "uasg": "091101",
+    "tipo": "Dispensa",
+    "numero": "001502026",
+    "compraId": "09110106001502026",
+    "totalItens": "auto",
+    "_uasg_pendente": true,
+    "_origem": "planilha_leo_2026-05-13"
+  },
+  {
+    "uasg": "250005",
+    "tipo": "Pregão",
+    "numero": "901362025",
+    "compraId": "25000505901362025",
+    "totalItens": "auto",
+    "_uasg_pendente": true,
+    "_origem": "planilha_leo_2026-05-13"
+  },
+  {
+    "uasg": "158127",
+    "tipo": "Pregão",
+    "numero": "900412025",
+    "compraId": "15812705900412025",
+    "totalItens": "auto",
+    "_uasg_pendente": true,
+    "_origem": "planilha_leo_2026-05-13"
+  },
+  {
+    "uasg": "120025",
+    "tipo": "Pregão",
+    "numero": "900332025",
+    "compraId": "12002505900332025",
+    "totalItens": "auto",
+    "_uasg_pendente": true,
+    "_origem": "planilha_leo_2026-05-13"
+  },
+  {
+    "uasg": "160166",
+    "tipo": "Pregão",
+    "numero": "900022026",
+    "compraId": "16016605900022026",
+    "totalItens": "auto",
+    "_uasg_pendente": true,
+    "_origem": "planilha_leo_2026-05-13"
+  },
+  {
+    "uasg": "152804",
+    "tipo": "Pregão",
+    "numero": "900012026",
+    "compraId": "15280405900012026",
+    "totalItens": "auto",
+    "_uasg_pendente": true,
+    "_origem": "planilha_leo_2026-05-13"
+  },
+  {
+    "uasg": "160209",
+    "tipo": "Pregão",
+    "numero": "900202025",
+    "compraId": "16020905900202025",
+    "totalItens": "auto",
+    "_uasg_pendente": true,
+    "_origem": "planilha_leo_2026-05-13"
+  },
+  {
+    "uasg": "925172",
+    "tipo": "Pregão",
+    "numero": "901122025",
+    "compraId": "92517205901122025",
+    "totalItens": "auto",
+    "_uasg_pendente": true,
+    "_origem": "planilha_leo_2026-05-13"
+  },
+  {
+    "uasg": "925998",
+    "tipo": "Pregão",
+    "numero": "900672026",
+    "compraId": "92599805900672026",
+    "totalItens": "auto",
+    "_uasg_pendente": true,
+    "_origem": "planilha_leo_2026-05-13"
+  },
+  {
+    "uasg": "742050",
+    "tipo": "Pregão",
+    "numero": "900082026",
+    "compraId": "74205005900082026",
+    "totalItens": "auto",
+    "_uasg_pendente": true,
+    "_origem": "planilha_leo_2026-05-13"
+  },
+  {
+    "uasg": "158148",
+    "tipo": "Pregão",
+    "numero": "900052026",
+    "compraId": "15814805900052026",
+    "totalItens": "auto",
+    "_uasg_pendente": true,
+    "_origem": "planilha_leo_2026-05-13"
+  },
+  {
+    "uasg": "120060",
+    "tipo": "Pregão",
+    "numero": "900352026",
+    "compraId": "12006005900352026",
+    "totalItens": "auto",
+    "_uasg_pendente": true,
+    "_origem": "planilha_leo_2026-05-13"
+  },
+  {
+    "uasg": "925046",
+    "tipo": "Pregão",
+    "numero": "900062026",
+    "compraId": "92504605900062026",
+    "totalItens": "auto",
+    "_uasg_pendente": true,
+    "_origem": "planilha_leo_2026-05-13"
+  },
+  {
+    "uasg": "925998",
+    "tipo": "Pregão",
+    "numero": "901032026",
+    "compraId": "92599805901032026",
+    "totalItens": "auto",
+    "_uasg_pendente": true,
+    "_origem": "planilha_leo_2026-05-13"
+  },
+  {
+    "uasg": "102147",
+    "tipo": "Dispensa",
+    "numero": "000012026",
+    "compraId": "10214706000012026",
+    "totalItens": "auto",
+    "_uasg_pendente": true,
+    "_origem": "planilha_leo_2026-05-13"
+  },
+  {
+    "uasg": "158317",
+    "tipo": "Dispensa",
+    "numero": "000832025",
+    "compraId": "15831706000832025",
+    "totalItens": "auto",
+    "_uasg_pendente": true,
+    "_origem": "planilha_leo_2026-05-13"
+  },
+  {
+    "uasg": "254446",
+    "tipo": "Pregão",
+    "numero": "900082026",
+    "compraId": "25444605900082026",
+    "totalItens": "auto",
+    "_uasg_pendente": true,
+    "_origem": "planilha_leo_2026-05-13"
+  },
+  {
+    "uasg": "070016",
+    "tipo": "Pregão",
+    "numero": "900062026",
+    "compraId": "07001605900062026",
+    "totalItens": "auto",
+    "_uasg_pendente": true,
+    "_origem": "planilha_leo_2026-05-13"
+  },
+  {
+    "uasg": "160019",
+    "tipo": "Pregão",
+    "numero": "900062026",
+    "compraId": "16001905900062026",
+    "totalItens": "auto",
+    "_uasg_pendente": true,
+    "_origem": "planilha_leo_2026-05-13"
+  },
+  {
+    "uasg": "752100",
+    "tipo": "Pregão",
+    "numero": "900022026",
+    "compraId": "75210005900022026",
+    "totalItens": "auto",
+    "_uasg_pendente": true,
+    "_origem": "planilha_leo_2026-05-13"
+  },
+  {
+    "uasg": "102111",
+    "tipo": "Dispensa",
+    "numero": "000902026",
+    "compraId": "10211106000902026",
+    "totalItens": "auto",
+    "_uasg_pendente": true,
+    "_origem": "planilha_leo_2026-05-13"
+  },
+  {
+    "uasg": "154050",
+    "tipo": "Pregão",
+    "numero": "900102026",
+    "compraId": "15405005900102026",
+    "totalItens": "auto",
+    "_uasg_pendente": true,
+    "_origem": "planilha_leo_2026-05-13"
+  },
+  {
+    "uasg": "154047",
+    "tipo": "Pregão",
+    "numero": "900092026",
+    "compraId": "15404705900092026",
+    "totalItens": "auto",
+    "_uasg_pendente": true,
+    "_origem": "planilha_leo_2026-05-13"
+  },
+  {
+    "uasg": "925849",
+    "tipo": "Dispensa",
+    "numero": "000072026",
+    "compraId": "92584906000072026",
+    "totalItens": "auto",
+    "_uasg_pendente": true,
+    "_origem": "planilha_leo_2026-05-13"
+  },
+  {
+    "uasg": "070018",
+    "tipo": "Pregão",
+    "numero": "900152026",
+    "compraId": "07001805900152026",
+    "totalItens": "auto",
+    "_uasg_pendente": true,
+    "_origem": "planilha_leo_2026-05-13"
+  },
+  {
+    "uasg": "956520",
+    "tipo": "Pregão",
+    "numero": "900102026",
+    "compraId": "95652005900102026",
+    "totalItens": "auto",
+    "_uasg_pendente": true,
+    "_origem": "planilha_leo_2026-05-13"
+  },
+  {
+    "uasg": "160304",
+    "tipo": "Pregão",
+    "numero": "900012026",
+    "compraId": "16030405900012026",
+    "totalItens": "auto",
+    "_uasg_pendente": true,
+    "_origem": "planilha_leo_2026-05-13"
+  },
+  {
+    "uasg": "257033",
+    "tipo": "Pregão",
+    "numero": "900012026",
+    "compraId": "25703305900012026",
+    "totalItens": "auto",
+    "_uasg_pendente": true,
+    "_origem": "planilha_leo_2026-05-13"
+  },
+  {
+    "uasg": "987885",
+    "tipo": "Pregão",
+    "numero": "900312026",
+    "compraId": "98788505900312026",
+    "totalItens": "auto",
+    "_uasg_pendente": true,
+    "_origem": "planilha_leo_2026-05-13"
+  },
+  {
+    "uasg": "158717",
+    "tipo": "Pregão",
+    "numero": "900072026",
+    "compraId": "15871705900072026",
+    "totalItens": "auto",
+    "_uasg_pendente": true,
+    "_origem": "planilha_leo_2026-05-13"
+  },
+  {
+    "uasg": "987789",
+    "tipo": "Dispensa",
+    "numero": "000252026",
+    "compraId": "98778906000252026",
+    "totalItens": "auto",
+    "_uasg_pendente": true,
+    "_origem": "planilha_leo_2026-05-13"
+  },
+  {
+    "uasg": "168004",
+    "tipo": "Pregão",
+    "numero": "900862026",
+    "compraId": "16800405900862026",
+    "totalItens": "auto",
+    "_uasg_pendente": true,
+    "_origem": "planilha_leo_2026-05-13"
+  },
+  {
+    "uasg": "926681",
+    "tipo": "Pregão",
+    "numero": "900042026",
+    "compraId": "92668105900042026",
+    "totalItens": "auto",
+    "_uasg_pendente": true,
+    "_origem": "planilha_leo_2026-05-13"
   }
 ]
