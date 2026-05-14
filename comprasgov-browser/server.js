@@ -637,14 +637,14 @@ app.post('/mensagens/ler', async (req, res) => {
 
 /**
  * POST /mensagens/responder
- * Body: { compraId, texto, dryRun? }
- * Envia (ou só preenche, em dry-run) uma resposta no chat de um pregão.
+ * Body: { compraId, item, texto, dryRun? }
+ * Envia (ou só preenche, em dry-run) uma resposta no chat de um item específico.
  * Em dry-run o texto é digitado mas não submetido — usuário valida via VNC.
- * ⚠️ Seletores em SEL_MSG precisam de recon ao vivo.
  */
 app.post('/mensagens/responder', async (req, res) => {
-  const { compraId, texto, dryRun } = req.body || {};
+  const { compraId, item, texto, dryRun } = req.body || {};
   if (!compraId)   return res.status(400).json({ erro: 'campo "compraId" obrigatório' });
+  if (!item)       return res.status(400).json({ erro: 'campo "item" obrigatório (número do item)' });
   if (!texto)      return res.status(400).json({ erro: 'campo "texto" obrigatório' });
   if (!pageSessao) return res.status(401).json({ erro: 'Sem sessão ativa — chame POST /sessao/iniciar primeiro' });
 
@@ -652,8 +652,8 @@ app.post('/mensagens/responder', async (req, res) => {
   busy = true;
 
   try {
-    const resultado = await responderMensagem(pageSessao, compraId, texto, { dryRun });
-    res.json({ sucesso: true, compraId: String(compraId), texto, ...resultado });
+    const resultado = await responderMensagem(pageSessao, compraId, item, texto, { dryRun });
+    res.json({ sucesso: true, compraId: String(compraId), item: String(item), texto, ...resultado });
   } catch (err) {
     console.error('[mensagens/responder]', err.message);
     res.status(500).json({ sucesso: false, erro: err.message });
@@ -707,7 +707,10 @@ app.post('/pregao/propostas', async (req, res) => {
         if (!pageSessao) {
           throw new Error('Sessão pageSessao não ativa — chame POST /sessao/iniciar primeiro');
         }
-        return responderMensagem(pageSessao, ctx.compraId, texto);
+        if (!ctx.item || ctx.item === '?') {
+          throw new Error('Item da mensagem não identificado — contexto incompleto, responda manualmente via VNC');
+        }
+        return responderMensagem(pageSessao, ctx.compraId, ctx.item, texto);
       });
       telegram.iniciarPolling();
       agendador.init({

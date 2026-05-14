@@ -17,23 +17,30 @@ const SEL = {
 };
 
 // ---------------------------------------------------------------------------
-// Seletores do chat de mensagens — ComprasNet legado (comprasnet.gov.br)
-// ⚠️ RECON_NEEDED: todos os valores abaixo precisam ser confirmados ao vivo
-//   via DevTools / Playwright codegen após login manual do Rafael.
-//   Procedure: POST /sessao/iniciar → logar → GET /screenshot → inspecionar HTML.
+// Seletores do chat de mensagens — ComprasNet (cnetmobile.estaleiro.serpro.gov.br)
+// Confirmados via recon ao vivo em 2026-05-14.
 // ---------------------------------------------------------------------------
 const SEL_MSG = {
+  // URL geral do drawer (read-only, todas mensagens da compra)
   urlChat: 'https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/acompanhamento-compra?compra=',
-  botaoChatAbrir: '.icones-mensagens, app-botao-mensagens-da-compra',
-  linhasMensagens: '.mensagem-card',
+
+  // URL por item — chat com form de resposta (read + write)
+  // Template: substituir {item} e {compra}
+  urlChatItem: 'https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/acompanhamento-compra/item/{item}?compra={compra}',
+
+  // Drawer global (visualização agregada)
+  botaoChatAbrir:  'app-botao-mensagens-da-compra',
+  linhasMensagens: 'app-mensagens-da-compra .mensagem-card',
   colMsgRemetente: '.mensagens-remetente',
-  colMsgDataHora: '.mensagens-data',
-  colMsgTexto: '.mensagens-texto',
-  // Selectors do form de resposta — pendentes de reconhecimento manual.
-  // Roteiro em scripts/recon-seletores-resposta.md.
-  linkResponder: '',  // botão/link que abre o form de resposta
-  campoResposta: '',  // textarea de input
-  botaoEnviar:   '',  // botão final de submissão
+  colMsgItem:      '.mensagens-item a',
+  colMsgDataHora:  '.mensagens-data small',
+  colMsgTexto:     '.mensagens-texto',
+
+  // Chat por item (textarea + botão Enviar)
+  cardMsgItem:     'app-mensagens-chat .cp-mensagens-compra',
+  propriaMarker:   '.propria',
+  campoResposta:   'app-mensagens-chat textarea[placeholder="Nova mensagem"]',
+  botaoEnviar:     'app-mensagens-chat button[primary]',
 };
 
 // ---------------------------------------------------------------------------
@@ -140,22 +147,22 @@ async function rasparItensPregao(page, uasg, numeroPregao, startUrl) {
 }
 
 // ---------------------------------------------------------------------------
-// lerMensagensChat — requer sessão logada
-// ⚠️ Seletores em SEL_MSG precisam de recon ao vivo para funcionar
+// lerMensagensChat — drawer global da compra (read-only). Requer sessão logada.
+// Retorna mensagens com campo `item` extraído do link .mensagens-item.
 // ---------------------------------------------------------------------------
 async function lerMensagensChat(page, compraId) {
   const targetUrl = SEL_MSG.urlChat + compraId;
-  
+
   if (!page.url().includes(compraId)) {
     await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
-    await page.waitForTimeout(5000); // Aguardar o SPA carregar
+    await page.waitForTimeout(5000); // aguarda o SPA carregar
   }
 
   if (page.url().includes('login')) {
     throw new Error('Sessão expirada — faça login via POST /sessao/iniciar');
   }
 
-  // Se não houver mensagens visíveis, tenta clicar no botão
+  // Se o drawer não estiver aberto, clica no ícone de mensagens
   const domHasCards = await page.$eval('body', el => el.innerHTML.includes('mensagem-card')).catch(() => false);
   if (!domHasCards) {
     const btnIcon = await page.$(SEL_MSG.botaoChatAbrir);
@@ -163,7 +170,6 @@ async function lerMensagensChat(page, compraId) {
       await btnIcon.click({ force: true });
       await page.waitForTimeout(3000);
     } else {
-      // Se não tem botão e não tem cards, retorna vazio
       return { mensagens: [], url: page.url(), total: 0 };
     }
   }
@@ -172,14 +178,46 @@ async function lerMensagensChat(page, compraId) {
     return cards.map(c => {
       const header = c.querySelector('.cabecalho-mensagem');
       const remetente = header ? (header.querySelector(sel.colMsgRemetente)?.innerText?.trim() || '') : '';
+      const itemRaw = c.querySelector(sel.colMsgItem)?.innerText?.trim() || '';
+      const item = (itemRaw.match(/\d+/) || [''])[0]; // "Item 17" → "17"
       const dataHora = c.querySelector(sel.colMsgDataHora)?.innerText?.trim() || '';
       const textoElem = c.querySelector(sel.colMsgTexto);
       const texto = textoElem ? textoElem.innerText?.trim() : c.innerText?.trim();
-      return { remetente, dataHora, texto };
+      return { remetente, item, dataHora, texto };
     }).filter(m => m.texto);
   }, SEL_MSG);
 
   return { mensagens, url: page.url(), total: mensagens.length };
+}
+
+// ---------------------------------------------------------------------------
+// lerMensagensItem — chat da página do item específico (read).
+// Estrutura diferente do drawer: cada msg é .cp-mensagens-compra; sem
+// .mensagens-remetente — distingue "própria" por classe CSS .propria.
+// ---------------------------------------------------------------------------
+async function lerMensagensItem(page, compraId, item) {
+  const targetUrl = SEL_MSG.urlChatItem
+    .replace('{item}',  String(item))
+    .replace('{compra}', String(compraId));
+
+  if (!page.url().includes(`/item/${item}`) || !page.url().includes(compraId)) {
+    await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+    await page.waitForTimeout(5000);
+  }
+
+  if (page.url().includes('login')) {
+    throw new Error('Sessão expirada — faça login via POST /sessao/iniciar');
+  }
+
+  const mensagens = await page.$$eval(SEL_MSG.cardMsgItem, (cards, sel) => {
+    return cards.map(c => ({
+      propria:  c.classList.contains(sel.propriaMarker.replace('.', '')),
+      dataHora: c.querySelector(sel.colMsgDataHora)?.innerText?.trim() || '',
+      texto:    c.querySelector(sel.colMsgTexto)?.innerText?.trim() || '',
+    })).filter(m => m.texto);
+  }, SEL_MSG);
+
+  return { mensagens, url: page.url(), total: mensagens.length, item: String(item) };
 }
 
 // ---------------------------------------------------------------------------
@@ -208,40 +246,52 @@ function _logResposta(entrada) {
   }
 }
 
-async function responderMensagem(page, compraId, texto, opts = {}) {
+async function responderMensagem(page, compraId, item, texto, opts = {}) {
   if (!compraId) throw new Error('responderMensagem: compraId obrigatório');
+  if (!item)     throw new Error('responderMensagem: item obrigatório (número do item)');
   if (!texto)    throw new Error('responderMensagem: texto obrigatório');
 
   const dryRun = opts.dryRun ?? (process.env.TELEGRAM_RESPONDER_DRY_RUN === 'true');
 
-  if (!SEL_MSG.linkResponder || !SEL_MSG.campoResposta || !SEL_MSG.botaoEnviar) {
-    const erro = 'SEL_MSG do form de resposta não configurado — execute o recon (scripts/recon-seletores-resposta.md)';
-    _logResposta({ compraId, texto, modo: dryRun ? 'dry-run' : 'auto', erro });
+  if (!SEL_MSG.campoResposta || !SEL_MSG.botaoEnviar) {
+    const erro = 'SEL_MSG.campoResposta ou SEL_MSG.botaoEnviar vazio';
+    _logResposta({ compraId, item, texto, modo: dryRun ? 'dry-run' : 'auto', erro });
     throw new Error(erro);
   }
 
-  await lerMensagensChat(page, compraId);
+  // Navega para a página do item — o form de resposta só existe nesse contexto
+  const targetUrl = SEL_MSG.urlChatItem
+    .replace('{item}',  String(item))
+    .replace('{compra}', String(compraId));
 
   try {
-    await page.click(SEL_MSG.linkResponder);
-    await page.waitForLoadState('domcontentloaded');
+    if (!page.url().includes(`/item/${item}`) || !page.url().includes(compraId)) {
+      await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+      await page.waitForTimeout(3000);
+    }
+
+    if (page.url().includes('login')) {
+      throw new Error('Sessão expirada — faça login via POST /sessao/iniciar');
+    }
+
+    await page.waitForSelector(SEL_MSG.campoResposta, { timeout: 10_000 });
     await page.fill(SEL_MSG.campoResposta, texto);
 
     if (dryRun) {
-      _logResposta({ compraId, texto, modo: 'dry-run', preenchido: true });
+      _logResposta({ compraId, item, texto, modo: 'dry-run', preenchido: true });
       return { sucesso: true, modo: 'dry-run', preenchido: true, enviadoEm: null, url: page.url() };
     }
 
     await page.click(SEL_MSG.botaoEnviar);
     await page.waitForLoadState('networkidle');
     const enviadoEm = new Date().toISOString();
-    _logResposta({ compraId, texto, modo: 'auto', enviadoEm });
+    _logResposta({ compraId, item, texto, modo: 'auto', enviadoEm });
     return { sucesso: true, modo: 'auto', enviadoEm, url: page.url() };
   } catch (e) {
-    _logResposta({ compraId, texto, modo: dryRun ? 'dry-run' : 'auto', erro: e.message });
+    _logResposta({ compraId, item, texto, modo: dryRun ? 'dry-run' : 'auto', erro: e.message });
     throw new Error(
-      `Erro ao ${dryRun ? 'preencher' : 'enviar'} resposta. ` +
-      `Use GET /screenshot para inspecionar. Erro: ${e.message}`,
+      `Erro ao ${dryRun ? 'preencher' : 'enviar'} resposta no item ${item} da compra ${compraId}. ` +
+      `Use GET /screenshot?sessao=1 para inspecionar. Erro: ${e.message}`,
     );
   }
 }
@@ -292,6 +342,7 @@ module.exports = {
   tirarScreenshot,
   rasparItensPregao,
   lerMensagensChat,
+  lerMensagensItem,
   responderMensagem,
   lerPropostasPregao,
   SEL,
