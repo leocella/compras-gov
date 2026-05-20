@@ -25,6 +25,10 @@ const _pendentesConfirmacao = new Map();
 // retorna o resultado da chamada a responderMensagem.
 let _onResponderPregoeiro = null;
 
+// Callback injetado pelo server.js para retomar lote pausado.
+// Recebe (chatId) opcionalmente e retorna string (mensagem para o user).
+let _onRetomar = null;
+
 // Permite monkey-patch nos testes
 let _enviarFn = null;
 
@@ -38,6 +42,7 @@ function init(token, chatId) {
 function _setEnviarFn(fn) { _enviarFn = fn; }
 
 function setResponderCallback(fn) { _onResponderPregoeiro = fn; }
+function setRetomarCallback(fn)   { _onRetomar = fn; }
 
 function _registrarContextoPregoeiro(messageId, ctx) {
   if (!messageId) return;
@@ -215,6 +220,28 @@ async function notificarMudancas(compraId, resumo, detalhes) {
   await enviar(texto);
 }
 
+async function notificarSessaoExpirada(motivo, comprasPendentes = []) {
+  const hhmm = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  const linhas = [
+    `🔒 <b>Sessão expirou</b> às ${hhmm}`,
+    `Motivo: ${motivo || 'não especificado'}`,
+    `Compras pendentes: <b>${comprasPendentes.length}</b>`,
+  ];
+  if (comprasPendentes.length) {
+    const amostra = comprasPendentes.slice(0, 10).map(id => `• ${id}`).join('\n');
+    linhas.push('', amostra);
+    if (comprasPendentes.length > 10) linhas.push(`<i>… e mais ${comprasPendentes.length - 10}</i>`);
+  }
+  linhas.push(
+    '',
+    '<b>Como retomar:</b>',
+    '1. Acesse a VPS via VNC',
+    '2. Refaça login no Chrome (resolva CAPTCHA)',
+    '3. Mande <code>/retomar</code> aqui',
+  );
+  return enviar(linhas.join('\n'));
+}
+
 async function notificarPregoeiro(compraId, uasg, numItem, texto, urgente = false) {
   let messageId;
 
@@ -371,6 +398,30 @@ async function _processarCallbackQuery(cb) {
   }
 }
 
+async function _processarSlashRetomar(chatId) {
+  if (!_onRetomar) {
+    await _post('sendMessage', {
+      chat_id: chatId,
+      text:    '❌ /retomar não configurado neste servidor',
+    });
+    return;
+  }
+  try {
+    const resposta = await _onRetomar(chatId);
+    await _post('sendMessage', {
+      chat_id:    chatId,
+      text:       resposta || '(sem resposta do callback)',
+      parse_mode: 'HTML',
+    });
+  } catch (err) {
+    console.error('[telegram] erro no /retomar:', err.message);
+    await _post('sendMessage', {
+      chat_id: chatId,
+      text:    `❌ Erro ao retomar: ${err.message}`,
+    });
+  }
+}
+
 async function _processarSlashResponder(texto, chatId) {
   const m = texto.match(/^\/responder\s+(\S+)\s+([\s\S]+)$/);
   if (!m) {
@@ -419,6 +470,12 @@ async function iniciarPolling() {
               continue;
             }
 
+            // 2b) Slash command /retomar (sem args) — retoma lote pausado
+            if (texto === '/retomar' || texto.startsWith('/retomar ')) {
+              await _processarSlashRetomar(chatId);
+              continue;
+            }
+
             // 3) Reply em mensagem do bot (notificação de pregoeiro)
             const replyId = msg.reply_to_message?.message_id;
             if (replyId && _pregoeiroContexto.has(replyId)) {
@@ -453,14 +510,17 @@ module.exports = {
   enviarDocumento,
   notificarMudancas,
   notificarPregoeiro,
+  notificarSessaoExpirada,
   iniciarPolling,
   pararPolling,
   setResponderCallback,
+  setRetomarCallback,
   // internos expostos para testes
   _setEnviarFn,
   _responderChave,
   _registrarContextoPregoeiro,
   _processarSlashResponder,
+  _processarSlashRetomar,
   _processarCallbackQuery,
   _solicitarConfirmacao,
   _formatarPreview,

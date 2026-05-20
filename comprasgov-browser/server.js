@@ -15,6 +15,8 @@ const sessao = require('./sessao');
 const da     = require('./dadosabertos-api');
 const telegram  = require('./telegram');
 const agendador = require('./agendador');
+const loteEstado  = require('./lote-estado');
+const { executarLote } = require('./lote-runner');
 
 const EventEmitter = require('events');
 const bus = new EventEmitter();
@@ -711,6 +713,38 @@ app.post('/pregao/propostas', async (req, res) => {
           throw new Error('Item da mensagem não identificado — contexto incompleto, responda manualmente via VNC');
         }
         return responderMensagem(pageSessao, ctx.compraId, ctx.item, texto);
+      });
+
+      // /retomar via Telegram → retoma lote pausado usando aba logada do Chrome
+      telegram.setRetomarCallback(async () => {
+        const estado = loteEstado.obterEstado();
+        if (!estado) return '❓ Nenhum lote anterior (sem dados/lote-estado.json).';
+        if (estado.status === loteEstado.STATUS.RODANDO) {
+          return '⏳ Lote já está rodando, aguarde concluir ou pausar.';
+        }
+        if (estado.status !== loteEstado.STATUS.PAUSADO) {
+          return `ℹ️ Lote não está pausado (status atual: <code>${estado.status}</code>).`;
+        }
+
+        const todosAlvos = JSON.parse(fs.readFileSync(path.join(__dirname, 'compras-alvo.json'), 'utf8'));
+        const pendentes = new Set(estado.compras_pendentes);
+        const alvos = todosAlvos.filter(a => pendentes.has(String(a.compraId)));
+        if (alvos.length === 0) {
+          return '⚠️ Lote pausado mas nenhuma das pendentes consta em <code>compras-alvo.json</code>.';
+        }
+
+        // Encontra a aba LOGADA do SPA (mesma heurística do raspar-lote)
+        const todasAbas = browser ? browser.contexts().flatMap(c => c.pages()) : [];
+        const pageLogada = todasAbas.find(p => p.url().includes('cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/'));
+        if (!pageLogada) {
+          return '⚠️ Nenhuma aba em <code>/seguro/fornecedor/</code> aberta no Chrome.\nFaça login + abra uma compra-alvo e mande /retomar de novo.';
+        }
+
+        // Fire-and-forget: não bloqueia a resposta do bot
+        executarLote({ alvos, page: pageLogada, telegram, iniciarNovo: false })
+          .catch(err => console.error('[retomar] erro no executarLote:', err.message));
+
+        return `🔄 <b>Retomando lote</b>: ${alvos.length} compra(s) pendente(s). Notificações de progresso aqui.`;
       });
       telegram.iniciarPolling();
       agendador.init({

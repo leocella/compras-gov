@@ -68,7 +68,8 @@ async function conectarChrome() {
 // Navegar dentro do SPA (sem page.goto, sem CAPTCHA)
 // ---------------------------------------------------------------------------
 async function navegarParaItemSPA(page, compraId, numItem) {
-  const novoCaminho = `/comprasnet-web/public/compras/acompanhamento-compra/item/${numItem}?compra=${compraId}`;
+  // Rota LOGADA (fornecedor) — reCAPTCHA estável, sessão persiste
+  const novoCaminho = `/comprasnet-web/seguro/fornecedor/acompanhamento-compra/item/${numItem}?compra=${compraId}`;
   log(`  Navegando SPA → item ${numItem}...`);
   await page.evaluate((path) => {
     window.history.pushState({}, '', path);

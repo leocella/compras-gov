@@ -335,6 +335,76 @@ async function lerPropostasPregao(page, uasg, numeroPregao) {
   return { propostas, total: propostas.length, url: page.url() };
 }
 
+// ---------------------------------------------------------------------------
+// verificarSessao — heurística leve pra detectar se a aba está em uma página
+// "boa" do ComprasGov SPA antes de tentar raspar.
+//
+// Critérios:
+//   (a) URL atual NÃO contém marcadores de tela de login/erro/intro
+//   (b) DOM tem ao menos um componente Angular conhecido da área da compra
+//   (c) bonus: não há checkbox visível de hCaptcha pedindo interação
+//
+// Retorna { valida: boolean, motivo: string | null }
+// `motivo` é null quando valida=true, ou descritivo curto quando false.
+// ---------------------------------------------------------------------------
+async function verificarSessao(page) {
+  try {
+    const url = page.url();
+
+    // (a) URL não pode ser de login/intro/erro nem redirecionada pro gov.br SSO
+    const urlBloqueada = /\/login|\/loginPortal|\/intro\.htm|\/sessao-expirada|\/erro/i;
+    if (urlBloqueada.test(url)) {
+      return { valida: false, motivo: `URL inválida: ${url}` };
+    }
+    const ssoGovBr = /sso\.acesso\.gov\.br|acesso\.gov\.br\/login|contas\.acesso\.gov\.br/i;
+    if (ssoGovBr.test(url)) {
+      return { valida: false, motivo: `Redirecionado pro gov.br SSO (sessão expirou)` };
+    }
+    // Só validamos URLs do SPA do ComprasGov
+    if (!/cnetmobile\.estaleiro\.serpro\.gov\.br|comprasnet|gov\.br\/compras/.test(url)) {
+      return { valida: false, motivo: `Fora do ComprasGov: ${url}` };
+    }
+
+    // (b) DOM tem componente Angular esperado + (c) sem hCaptcha visível
+    const status = await page.evaluate(() => {
+      const seletoresAlvo = [
+        'app-acompanhamento-compra-fornecedor',
+        'app-acompanhamento-compra-fornecedor-item',
+        'app-cabecalho-compra',
+        'app-identificacao-compra',
+      ];
+      const temAlvo = seletoresAlvo.some(s => document.querySelector(s));
+
+      // hCaptcha pendente: iframe REALMENTE visível do challenge.
+      // Importante: getBoundingClientRect retorna tamanho > 0 mesmo com
+      // visibility:hidden — precisa checar visibility computada também.
+      const captchaFrames = Array.from(document.querySelectorAll('iframe[src*="hcaptcha"]'));
+      const captchaVisivel = captchaFrames.some(f => {
+        const r  = f.getBoundingClientRect();
+        const cs = getComputedStyle(f);
+        return r.width > 50 && r.height > 50
+          && f.offsetParent !== null
+          && cs.visibility === 'visible'
+          && cs.display !== 'none'
+          && cs.opacity !== '0';
+      });
+
+      return { temAlvo, captchaVisivel };
+    });
+
+    if (status.captchaVisivel) {
+      return { valida: false, motivo: 'CAPTCHA pendente — resolva via VNC' };
+    }
+    if (!status.temAlvo) {
+      return { valida: false, motivo: 'Página sem componente da compra (provável redirect/expiração)' };
+    }
+
+    return { valida: true, motivo: null };
+  } catch (err) {
+    return { valida: false, motivo: `Erro ao verificar sessão: ${err.message}` };
+  }
+}
+
 module.exports = {
   extrairMarcas,
   parsearLinhasPropostas,
@@ -345,6 +415,7 @@ module.exports = {
   lerMensagensItem,
   responderMensagem,
   lerPropostasPregao,
+  verificarSessao,
   SEL,
   SEL_MSG,
   SEL_PROP,

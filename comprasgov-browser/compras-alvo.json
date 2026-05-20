@@ -444,5 +444,21 @@
     "totalItens": "auto",
     "_uasg_pendente": true,
     "_origem": "planilha_leo_2026-05-13"
+  },
+  {
+    "uasg": "791170",
+    "tipo": "Dispensa",
+    "numero": "001162026",
+    "compraId": "79117006001162026",
+    "totalItens": "auto",
+    "_origem": "teste_3compras_2026-05-20"
+  },
+  {
+    "uasg": "460681",
+    "tipo": "Pregão",
+    "numero": "900112026",
+    "compraId": "46068105900112026",
+    "totalItens": "auto",
+    "_origem": "teste_3compras_2026-05-20"
   }
 ]

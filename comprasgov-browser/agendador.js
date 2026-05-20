@@ -5,9 +5,6 @@ const fs   = require('fs');
 const path = require('path');
 
 const {
-  navegarParaItemSPA,
-  extrairDadosPaginaAtual,
-  salvarSnapshot,
   gerarExcel,
   sleep,
   log,
@@ -15,6 +12,8 @@ const {
 
 const { lerMensagensChat, SEL_MSG } = require('./comprasgov');
 const { compararSnapshots }         = require('./comparar-snapshots');
+const loteEstado                    = require('./lote-estado');
+const { executarLote }              = require('./lote-runner');
 
 // ─── Configuração via .env ───────────────────────────────────────────────────
 
@@ -97,6 +96,18 @@ async function jobScrapingDiario() {
     return;
   }
 
+  // Não pisa em lote pausado pendente — pede /retomar
+  const estadoAnterior = loteEstado.obterEstado();
+  if (estadoAnterior && estadoAnterior.status === loteEstado.STATUS.PAUSADO) {
+    await _telegram.enviar(
+      `⏸️ <b>Scraping diário NÃO iniciado</b> — há lote anterior pausado.\n` +
+      `Compras pendentes: ${estadoAnterior.compras_pendentes.length}\n` +
+      `Mande <code>/retomar</code> pra continuar ou apague <code>dados/lote-estado.json</code> pra começar novo.`
+    );
+    log('[agendador] Lote anterior pausado — abortando scraping diário.');
+    return;
+  }
+
   let alvos;
   try {
     alvos = carregarAlvos();
@@ -106,51 +117,38 @@ async function jobScrapingDiario() {
   }
   if (_bus) _bus.emit('scraping_inicio', { total: alvos.length });
 
-  for (let i = 0; i < alvos.length; i++) {
-    const alvo     = alvos[i];
-    const compraId = alvo.compraId;
-    log(`[agendador] [${i + 1}/${alvos.length}] Compra ${compraId}`);
+  // Delega o loop para o lote-runner compartilhado (mesma lógica do /retomar e do CLI)
+  const resultado = await executarLote({
+    alvos,
+    page,
+    telegram: _telegram,
+    iniciarNovo: true,
+  });
 
-    const resultados = [];
-    let itemAtual = 1;
-
+  // Para cada compra concluída, faz a comparação com o snapshot de ontem
+  // e envia notificação + Excel das mudanças (comportamento original do agendador).
+  const estadoFinal = loteEstado.obterEstado();
+  const concluidas  = estadoFinal?.compras_concluidas ?? [];
+  for (const compraId of concluidas) {
     try {
-      while (itemAtual <= 200) {
-        if (itemAtual === 1) {
-          const url = `https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/public/compras/acompanhamento-compra/item/1?compra=${compraId}`;
-          if (!page.url().includes(compraId)) {
-            await page.goto(url);
-            await sleep(5000);
-          }
-        } else {
-          await navegarParaItemSPA(page, compraId, itemAtual);
-        }
-
-        const dados = await extrairDadosPaginaAtual(page, itemAtual);
-        if (!dados || !dados.dadosItem || !dados.dadosItem.descricao) break;
-
-        resultados.push(dados);
-        itemAtual++;
-        await sleep(3000);
-      }
-
-      if (resultados.length === 0) {
-        log(`[agendador] Compra ${compraId}: nenhum item extraído.`);
-        continue;
-      }
-
-      salvarSnapshot(resultados, compraId);
-      await _compararENotificar(compraId, resultados, alvo);
-
+      const alvo = alvos.find(a => String(a.compraId) === String(compraId));
+      const snapshotHojePath = path.join(SNAPSHOTS_DIR, `snapshot_${compraId}_${hoje()}.json`);
+      if (!fs.existsSync(snapshotHojePath)) continue;
+      const resultadosHoje = JSON.parse(fs.readFileSync(snapshotHojePath, 'utf8'));
+      await _compararENotificar(compraId, resultadosHoje, alvo);
     } catch (err) {
-      log(`[agendador] Erro na compra ${compraId}: ${err.message}`);
+      log(`[agendador] Erro na comparação de ${compraId}: ${err.message}`);
     }
-
-    if (i < alvos.length - 1) await sleep(5000);
   }
 
-  if (_bus) _bus.emit('scraping_fim', { comprasProcessadas: alvos.length });
-  log('[agendador] Scraping diário concluído.');
+  if (_bus) {
+    _bus.emit('scraping_fim', {
+      pausado:    resultado.pausado,
+      concluidas: concluidas.length,
+      falhas:     estadoFinal?.compras_falhas?.length ?? 0,
+    });
+  }
+  log(`[agendador] Scraping diário finalizado — pausado=${resultado.pausado}, concluidas=${concluidas.length}.`);
 }
 
 async function _compararENotificar(compraId, resultadosHoje, alvo) {
