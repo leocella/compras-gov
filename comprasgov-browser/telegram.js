@@ -183,6 +183,50 @@ function _postMultipart(metodo, chatId, filePath, caption) {
   });
 }
 
+// _postPhoto — envia Buffer PNG via sendPhoto (multipart manual).
+// Diferente de _postMultipart, NÃO lê do disco — recebe o Buffer pronto.
+function _postPhoto(chatId, buffer, caption) {
+  return new Promise((resolve, reject) => {
+    const boundary = '----comprasgov_' + Date.now().toString(16);
+    const head = (name, extra = '') =>
+      `--${boundary}\r\nContent-Disposition: form-data; name="${name}"${extra}\r\n\r\n`;
+
+    const parts = [];
+    parts.push(Buffer.from(head('chat_id') + String(chatId) + '\r\n'));
+    if (caption) {
+      parts.push(Buffer.from(head('caption') + caption + '\r\n'));
+      parts.push(Buffer.from(head('parse_mode') + 'HTML' + '\r\n'));
+    }
+    parts.push(Buffer.from(
+      `--${boundary}\r\nContent-Disposition: form-data; name="photo"; filename="chat.png"\r\n` +
+      `Content-Type: image/png\r\n\r\n`
+    ));
+    parts.push(buffer);
+    parts.push(Buffer.from(`\r\n--${boundary}--\r\n`));
+
+    const body = Buffer.concat(parts);
+    const req = https.request({
+      hostname: 'api.telegram.org',
+      path: `/bot${_token}/sendPhoto`,
+      method: 'POST',
+      headers: {
+        'Content-Type':   `multipart/form-data; boundary=${boundary}`,
+        'Content-Length': body.length,
+      },
+    }, (res) => {
+      let raw = '';
+      res.on('data', c => { raw += c; });
+      res.on('end', () => {
+        try { resolve(JSON.parse(raw)); }
+        catch { resolve({ ok: false, raw }); }
+      });
+    });
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
+
 async function enviarDocumento(filePath, caption) {
   if (!_token) throw new Error('[telegram] Não inicializado — chame init() primeiro');
   if (!fs.existsSync(filePath)) throw new Error(`Arquivo não encontrado: ${filePath}`);
