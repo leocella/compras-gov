@@ -313,6 +313,50 @@ async function limparCampo(page, compraId, item, motivo = 'manual') {
 }
 
 // ---------------------------------------------------------------------------
+// capturarScreenshotChat — recorta o screenshot na união dos bounding boxes
+// das últimas N mensagens + o form de resposta. Fallback: viewport inteiro
+// se a união ultrapassar a viewport (evita screenshot gigante). Retorna Buffer
+// PNG — quem chamar (telegram.js) envia direto via sendPhoto, sem gravar em disco.
+// ---------------------------------------------------------------------------
+async function capturarScreenshotChat(page, opts = {}) {
+  const nMsgs = opts.nMsgs ?? 3;
+
+  try {
+    const clip = await page.evaluate(({ cardSel, formSel, n }) => {
+      const cards = Array.from(document.querySelectorAll(cardSel)).slice(-n);
+      const form  = document.querySelector(formSel);
+      const els = [...cards, form].filter(Boolean);
+      if (els.length === 0) return null;
+      const rects = els.map(e => e.getBoundingClientRect());
+      const top    = Math.min(...rects.map(r => r.top));
+      const left   = Math.min(...rects.map(r => r.left));
+      const right  = Math.max(...rects.map(r => r.right));
+      const bottom = Math.max(...rects.map(r => r.bottom));
+      const PADDING = 12;
+      return {
+        x: Math.max(0, Math.floor(left  - PADDING)),
+        y: Math.max(0, Math.floor(top   - PADDING)),
+        width:  Math.ceil((right  - left)   + 2 * PADDING),
+        height: Math.ceil((bottom - top)    + 2 * PADDING),
+      };
+    }, { cardSel: SEL_MSG.cardMsgItem, formSel: SEL_MSG.campoResposta, n: nMsgs });
+
+    const viewport = page.viewportSize() || { width: 1280, height: 720 };
+    const fits = clip
+      && clip.width  > 0 && clip.height > 0
+      && clip.width  <= viewport.width
+      && clip.height <= viewport.height;
+
+    if (fits) {
+      return page.screenshot({ type: 'png', clip });
+    }
+  } catch (e) {
+    // cai pro fallback abaixo
+  }
+  return page.screenshot({ type: 'png', fullPage: false });
+}
+
+// ---------------------------------------------------------------------------
 // responderMensagem — envia (ou só preenche, em dry-run) resposta ao pregoeiro
 //
 // Em dry-run, o texto é digitado no campo mas NUNCA é submetido — o usuário
@@ -511,6 +555,7 @@ module.exports = {
   preencherSemEnviar,
   enviarPreenchido,
   limparCampo,
+  capturarScreenshotChat,
   lerPropostasPregao,
   verificarSessao,
   SEL,
