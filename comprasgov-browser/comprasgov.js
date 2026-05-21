@@ -378,6 +378,10 @@ function _logResposta(entrada) {
   }
 }
 
+function _logRespostaRaceDetected({ compraId, item, sigOrig, sigNovo }) {
+  _logResposta({ ts: new Date().toISOString(), evento: 'race-detected', compraId, item, sigOrig, sigNovo });
+}
+
 async function responderMensagem(page, compraId, item, texto, opts = {}) {
   if (!compraId) throw new Error('responderMensagem: compraId obrigatório');
   if (!item)     throw new Error('responderMensagem: item obrigatório (número do item)');
@@ -536,6 +540,7 @@ module.exports = {
   enviarPreenchido,
   limparCampo,
   capturarScreenshotChat,
+  _logRespostaRaceDetected,
   lerPropostasPregao,
   verificarSessao,
   SEL,
