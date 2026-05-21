@@ -61,8 +61,21 @@ let _onResponderPregoeiro = null;
 // Recebe (chatId) opcionalmente e retorna string (mensagem para o user).
 let _onRetomar = null;
 
+// Callbacks do novo fluxo de dupla confirmação
+let _onPreencher          = null;
+let _onEnviarPreenchido   = null;
+let _onLimparCampo        = null;
+function setPreencherCallback(fn)          { _onPreencher = fn; }
+function setEnviarPreenchidoCallback(fn)   { _onEnviarPreenchido = fn; }
+function setLimparCampoCallback(fn)        { _onLimparCampo = fn; }
+function _getPreencherCallback()           { return _onPreencher; }
+function _getEnviarPreenchidoCallback()    { return _onEnviarPreenchido; }
+function _getLimparCampoCallback()         { return _onLimparCampo; }
+
 // Permite monkey-patch nos testes
 let _enviarFn = null;
+let _postFn   = null;
+function _setPostFn(fn) { _postFn = fn; }
 
 function init(token, chatId) {
   if (!token)  throw new Error('[telegram] TELEGRAM_TOKEN não definido no .env');
@@ -86,6 +99,7 @@ function _registrarContextoPregoeiro(messageId, ctx) {
 }
 
 function _post(metodo, payload) {
+  if (_postFn) return _postFn(metodo, payload);
   return new Promise((resolve, reject) => {
     const body = JSON.stringify(payload);
     const req  = https.request({
@@ -420,6 +434,46 @@ async function _solicitarConfirmacao(ctx, texto, chatId) {
   }
 }
 
+// Etapa 1 do fluxo de dupla confirmação: envia preview do texto com botão
+// "✏️ Preencher no chat". Quando confirmado, _processarPreencher digita no
+// form do portal (sem enviar) e dispara a etapa 2 com screenshot.
+async function _solicitarPreenchimento(ctx, texto, chatId) {
+  const callbackId = _gerarCallbackId();
+  _preenchidosPendentes.set(callbackId, {
+    compraId: ctx.compraId, uasg: ctx.uasg, item: ctx.item,
+    texto, chatId,
+    etapa1MsgId: null, etapa2MsgId: null,
+    preenchidoEm: null, lastMessageSig: null,
+    timeoutId: null,
+  });
+
+  const r = await _post('sendMessage', {
+    chat_id: chatId,
+    text: [
+      `📝 <b>Texto a enviar</b>`,
+      `Compra ${ctx.compraId} / Item ${ctx.item}`,
+      ``,
+      `<i>${texto}</i>`,
+    ].join('\n'),
+    parse_mode: 'HTML',
+    reply_markup: {
+      inline_keyboard: [[
+        { text: '✏️ Preencher no chat', callback_data: `p:${callbackId}` },
+        { text: '❌ Cancelar',           callback_data: `x:${callbackId}` },
+      ]],
+    },
+  });
+
+  if (r.ok) {
+    const p = _preenchidosPendentes.get(callbackId);
+    if (p) p.etapa1MsgId = r.result.message_id;
+    _persistirPreenchidos();
+  } else {
+    _preenchidosPendentes.delete(callbackId);
+    console.error('[telegram] Falha na etapa 1:', JSON.stringify(r).slice(0, 200));
+  }
+}
+
 async function _processarCallbackQuery(cb) {
   const data = cb.data || '';
   const sep  = data.indexOf(':');
@@ -591,7 +645,15 @@ module.exports = {
   pararPolling,
   setResponderCallback,
   setRetomarCallback,
+  setPreencherCallback,
+  setEnviarPreenchidoCallback,
+  setLimparCampoCallback,
   // internos expostos para testes
+  _getPreencherCallback,
+  _getEnviarPreenchidoCallback,
+  _getLimparCampoCallback,
+  _setPostFn,
+  _solicitarPreenchimento,
   _setEnviarFn,
   _responderChave,
   _registrarContextoPregoeiro,

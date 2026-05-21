@@ -166,3 +166,34 @@ test('_carregarPreenchidos lê e devolve objeto vazio se arquivo não existe', (
   const r = t._carregarPreenchidos();
   assert.deepStrictEqual(r, {});
 });
+
+test('setters armazenam callbacks dos 3 estágios', () => {
+  const t = loadFresh();
+  const f1 = () => {}, f2 = () => {}, f3 = () => {};
+  t.setPreencherCallback(f1);
+  t.setEnviarPreenchidoCallback(f2);
+  t.setLimparCampoCallback(f3);
+  assert.strictEqual(t._getPreencherCallback(), f1);
+  assert.strictEqual(t._getEnviarPreenchidoCallback(), f2);
+  assert.strictEqual(t._getLimparCampoCallback(), f3);
+});
+
+test('_solicitarPreenchimento cria entrada em _preenchidosPendentes e envia msg etapa 1', async () => {
+  const path = require('node:path');
+  const t = loadFresh();
+  t.init('tok:abc', '999');
+  t._setPreenchidosFile(path.join(require('node:os').tmpdir(), `pp-${Date.now()}.json`));
+
+  const posts = [];
+  t._setPostFn(async (metodo, payload) => {
+    posts.push({ metodo, payload });
+    return { ok: true, result: { message_id: 42 } };
+  });
+
+  await t._solicitarPreenchimento({ compraId: 'C1', uasg: 'U1', item: '11' }, 'texto', 999);
+
+  assert.strictEqual(posts.length, 1);
+  assert.strictEqual(posts[0].metodo, 'sendMessage');
+  assert.ok(posts[0].payload.reply_markup.inline_keyboard[0][0].callback_data.startsWith('p:'));
+  assert.strictEqual(t._preenchidosPendentes.size, 1);
+});
