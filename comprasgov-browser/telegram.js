@@ -75,7 +75,9 @@ function _getLimparCampoCallback()         { return _onLimparCampo; }
 // Permite monkey-patch nos testes
 let _enviarFn = null;
 let _postFn   = null;
+let _postPhotoFn = null;
 function _setPostFn(fn) { _postFn = fn; }
+function _setPostPhotoFn(fn) { _postPhotoFn = fn; }
 
 function init(token, chatId) {
   if (!token)  throw new Error('[telegram] TELEGRAM_TOKEN não definido no .env');
@@ -232,6 +234,7 @@ function _postMultipart(metodo, chatId, filePath, caption) {
 // _postPhoto — envia Buffer PNG via sendPhoto (multipart manual).
 // Diferente de _postMultipart, NÃO lê do disco — recebe o Buffer pronto.
 function _postPhoto(chatId, buffer, caption) {
+  if (_postPhotoFn) return _postPhotoFn(chatId, buffer, caption);
   return new Promise((resolve, reject) => {
     const boundary = '----comprasgov_' + Date.now().toString(16);
     const head = (name, extra = '') =>
@@ -474,6 +477,130 @@ async function _solicitarPreenchimento(ctx, texto, chatId) {
   }
 }
 
+const TIMEOUT_PREENCHIDO_MS = 10 * 60 * 1000; // 10 min
+
+async function _processarPreencher(callbackId) {
+  const pend = _preenchidosPendentes.get(callbackId);
+  if (!pend) return;
+  if (!_onPreencher) {
+    await _post('sendMessage', { chat_id: pend.chatId, text: '❌ _onPreencher não configurado' });
+    _preenchidosPendentes.delete(callbackId);
+    _persistirPreenchidos();
+    return;
+  }
+
+  try {
+    const r = await _onPreencher(
+      { compraId: pend.compraId, uasg: pend.uasg, item: pend.item },
+      pend.texto,
+    );
+    pend.lastMessageSig = r.lastMessageSig;
+    pend.preenchidoEm   = r.preenchidoEm || new Date().toISOString();
+
+    const caption = [
+      `📝 <b>Pronto para enviar</b>`,
+      `Compra ${pend.compraId} / Item ${pend.item}`,
+      `Texto preenchido no campo. Confirme o envio:`,
+    ].join('\n');
+
+    const photoResp = await _postPhoto(pend.chatId, r.screenshotBuffer, caption);
+    if (photoResp.ok) {
+      pend.etapa2MsgId = photoResp.result.message_id;
+    }
+    // Botões inline NÃO são suportados em sendPhoto sem reply_markup multipart →
+    // mandamos uma msg separada com os botões.
+    const botoes = await _post('sendMessage', {
+      chat_id: pend.chatId,
+      text: '⬇️ Ação:',
+      reply_markup: {
+        inline_keyboard: [[
+          { text: '🚀 ENVIAR AGORA',     callback_data: `s:${callbackId}` },
+          { text: '❌ Cancelar + Limpar', callback_data: `l:${callbackId}` },
+        ]],
+      },
+    });
+    if (botoes.ok && !pend.etapa2MsgId) {
+      pend.etapa2MsgId = botoes.result.message_id;
+    }
+
+    pend.timeoutId = setTimeout(
+      () => { _processarLimpar(callbackId, 'timeout-10min').catch(()=>{}); },
+      TIMEOUT_PREENCHIDO_MS,
+    );
+    _persistirPreenchidos();
+  } catch (err) {
+    await _post('sendMessage', { chat_id: pend.chatId, text: `❌ Erro ao preencher: ${err.message}` });
+    _preenchidosPendentes.delete(callbackId);
+    _persistirPreenchidos();
+  }
+}
+
+async function _processarEnviar(callbackId) {
+  const pend = _preenchidosPendentes.get(callbackId);
+  if (!pend) return;
+  if (pend.timeoutId) clearTimeout(pend.timeoutId);
+
+  if (!_onEnviarPreenchido) {
+    await _post('sendMessage', { chat_id: pend.chatId, text: '❌ _onEnviarPreenchido não configurado' });
+    _preenchidosPendentes.delete(callbackId);
+    _persistirPreenchidos();
+    return;
+  }
+
+  try {
+    const r = await _onEnviarPreenchido(
+      { compraId: pend.compraId, uasg: pend.uasg, item: pend.item },
+      pend.lastMessageSig,
+    );
+    const hhmm = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    let texto = `✅ Enviado às ${hhmm}`;
+    if (r.houveNovaMsg) {
+      texto = `⚠️ Nova msg do pregoeiro chegou entre etapas\n${texto}`;
+    }
+    if (pend.etapa2MsgId) {
+      await _post('editMessageText', {
+        chat_id: pend.chatId, message_id: pend.etapa2MsgId,
+        text: texto, parse_mode: 'HTML',
+      });
+    } else {
+      await _post('sendMessage', { chat_id: pend.chatId, text: texto, parse_mode: 'HTML' });
+    }
+  } catch (err) {
+    await _post('sendMessage', { chat_id: pend.chatId, text: `❌ Erro ao enviar: ${err.message}` });
+  } finally {
+    _preenchidosPendentes.delete(callbackId);
+    _persistirPreenchidos();
+  }
+}
+
+async function _processarLimpar(callbackId, motivo = 'manual') {
+  const pend = _preenchidosPendentes.get(callbackId);
+  if (!pend) return;
+  if (pend.timeoutId) clearTimeout(pend.timeoutId);
+
+  if (_onLimparCampo) {
+    try {
+      await _onLimparCampo({ compraId: pend.compraId, uasg: pend.uasg, item: pend.item }, motivo);
+    } catch (e) {
+      console.error('[telegram] erro ao limpar campo:', e.message);
+    }
+  }
+
+  const texto = motivo === 'timeout-10min'
+    ? '⏰ Expirou após 10 min — campo limpo automaticamente'
+    : '❌ Cancelado — campo limpo';
+  if (pend.etapa2MsgId) {
+    await _post('editMessageText', {
+      chat_id: pend.chatId, message_id: pend.etapa2MsgId, text: texto,
+    }).catch(()=>{});
+  } else {
+    await _post('sendMessage', { chat_id: pend.chatId, text: texto }).catch(()=>{});
+  }
+
+  _preenchidosPendentes.delete(callbackId);
+  _persistirPreenchidos();
+}
+
 async function _processarCallbackQuery(cb) {
   const data = cb.data || '';
   const sep  = data.indexOf(':');
@@ -653,7 +780,11 @@ module.exports = {
   _getEnviarPreenchidoCallback,
   _getLimparCampoCallback,
   _setPostFn,
+  _setPostPhotoFn,
   _solicitarPreenchimento,
+  _processarPreencher,
+  _processarEnviar,
+  _processarLimpar,
   _setEnviarFn,
   _responderChave,
   _registrarContextoPregoeiro,

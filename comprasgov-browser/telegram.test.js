@@ -197,3 +197,84 @@ test('_solicitarPreenchimento cria entrada em _preenchidosPendentes e envia msg 
   assert.ok(posts[0].payload.reply_markup.inline_keyboard[0][0].callback_data.startsWith('p:'));
   assert.strictEqual(t._preenchidosPendentes.size, 1);
 });
+
+test('_processarPreencher chama _onPreencher e envia screenshot via _postPhoto', async () => {
+  const path = require('node:path');
+  const t = loadFresh();
+  t.init('tok:abc', '999');
+  t._setPreenchidosFile(path.join(require('node:os').tmpdir(), `pp-${Date.now()}.json`));
+
+  t._setPostFn(async () => ({ ok: true, result: { message_id: 1 } }));
+  await t._solicitarPreenchimento({ compraId: 'C1', uasg: 'U1', item: '11' }, 'olá', 999);
+  const cbId = [...t._preenchidosPendentes.keys()][0];
+
+  t.setPreencherCallback(async (ctx, texto) => {
+    assert.strictEqual(ctx.compraId, 'C1');
+    assert.strictEqual(texto, 'olá');
+    return { lastMessageSig: 'sig123', screenshotBuffer: Buffer.from('PNG_FAKE') };
+  });
+
+  const photoCalls = [];
+  t._setPostPhotoFn(async (chatId, buf, caption) => {
+    photoCalls.push({ chatId, len: buf.length, caption });
+    return { ok: true, result: { message_id: 2 } };
+  });
+
+  await t._processarPreencher(cbId);
+
+  assert.strictEqual(photoCalls.length, 1);
+  assert.strictEqual(photoCalls[0].chatId, 999);
+  const p = t._preenchidosPendentes.get(cbId);
+  assert.strictEqual(p.lastMessageSig, 'sig123');
+  assert.strictEqual(p.etapa2MsgId, 2);
+  assert.ok(p.timeoutId, 'timeoutId deveria ter sido agendado');
+  clearTimeout(p.timeoutId);
+});
+
+test('_processarEnviar chama _onEnviarPreenchido e edita msg de confirmação', async () => {
+  const path = require('node:path');
+  const t = loadFresh();
+  t.init('tok:abc', '999');
+  t._setPreenchidosFile(path.join(require('node:os').tmpdir(), `pp-${Date.now()}.json`));
+  const cbId = 'TESTABCD';
+  t._preenchidosPendentes.set(cbId, {
+    compraId: 'C1', uasg: 'U', item: '11', texto: 'oi',
+    chatId: 999, etapa1MsgId: 1, etapa2MsgId: 2,
+    preenchidoEm: '2026-05-20T17:00:00Z',
+    lastMessageSig: 'sigOrig',
+    timeoutId: setTimeout(()=>{}, 60_000),
+  });
+  t.setEnviarPreenchidoCallback(async (ctx, sigOriginal) => {
+    assert.strictEqual(sigOriginal, 'sigOrig');
+    return { enviadoEm: '2026-05-20T17:01:00Z', houveNovaMsg: false };
+  });
+  const posts = [];
+  t._setPostFn(async (m, p) => { posts.push({ m, p }); return { ok: true }; });
+
+  await t._processarEnviar(cbId);
+
+  assert.ok(posts.some(c => c.m === 'editMessageText' && c.p.message_id === 2),
+    'deveria ter editado a msg da etapa 2');
+  assert.strictEqual(t._preenchidosPendentes.has(cbId), false, 'pendente removido após enviar');
+});
+
+test('_processarLimpar chama _onLimparCampo, cancela timeout e edita msg', async () => {
+  const path = require('node:path');
+  const t = loadFresh();
+  t.init('tok:abc', '999');
+  t._setPreenchidosFile(path.join(require('node:os').tmpdir(), `pp-${Date.now()}.json`));
+  const cbId = 'TESTABCD';
+  const handle = setTimeout(()=>{ throw new Error('timeout não cancelado'); }, 100);
+  t._preenchidosPendentes.set(cbId, {
+    compraId: 'C1', item: '11', chatId: 999, etapa2MsgId: 2, timeoutId: handle,
+  });
+  let limparCalled = false;
+  t.setLimparCampoCallback(async () => { limparCalled = true; return {}; });
+  t._setPostFn(async () => ({ ok: true }));
+
+  await t._processarLimpar(cbId, 'manual');
+
+  assert.ok(limparCalled);
+  assert.strictEqual(t._preenchidosPendentes.has(cbId), false);
+  await new Promise(r => setTimeout(r, 150));
+});
