@@ -247,6 +247,72 @@ async function obterUltimaAssinaturaMsg(page, compraId, item) {
 }
 
 // ---------------------------------------------------------------------------
+// preencherSemEnviar — navega, digita o texto no campo de resposta, NÃO clica
+// Enviar. Captura assinatura da última mensagem do pregoeiro como baseline
+// para race detection na etapa 2.
+// ---------------------------------------------------------------------------
+async function preencherSemEnviar(page, compraId, item, texto) {
+  if (!compraId) throw new Error('preencherSemEnviar: compraId obrigatório');
+  if (!item)     throw new Error('preencherSemEnviar: item obrigatório');
+  if (!texto)    throw new Error('preencherSemEnviar: texto obrigatório');
+  if (!SEL_MSG.campoResposta) throw new Error('SEL_MSG.campoResposta vazio');
+
+  const targetUrl = SEL_MSG.urlChatItem
+    .replace('{item}',  String(item))
+    .replace('{compra}', String(compraId));
+
+  if (!page.url().includes(`/item/${item}`) || !page.url().includes(compraId)) {
+    await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+    await page.waitForTimeout(3000);
+  }
+  if (page.url().includes('login')) {
+    throw new Error('Sessão expirada — relogar via VNC');
+  }
+
+  await page.waitForSelector(SEL_MSG.campoResposta, { timeout: 10_000 });
+  await page.fill(SEL_MSG.campoResposta, texto);
+
+  const lastMessageSig = await obterUltimaAssinaturaMsg(page, compraId, item);
+  const preenchidoEm   = new Date().toISOString();
+
+  _logResposta({ ts: preenchidoEm, evento: 'preenchido', compraId, item, texto, lastMessageSig });
+  return { url: page.url(), lastMessageSig, preenchidoEm };
+}
+
+// ---------------------------------------------------------------------------
+// enviarPreenchido — clica o botão Enviar do portal. Assume campo já preenchido
+// (por preencherSemEnviar). Não navega — usa a página atual.
+// ---------------------------------------------------------------------------
+async function enviarPreenchido(page, compraId, item) {
+  if (!SEL_MSG.botaoEnviar) throw new Error('SEL_MSG.botaoEnviar vazio');
+  await page.waitForSelector(SEL_MSG.botaoEnviar, { timeout: 10_000 });
+  await page.click(SEL_MSG.botaoEnviar);
+  await page.waitForLoadState('networkidle');
+  const enviadoEm = new Date().toISOString();
+  _logResposta({ ts: enviadoEm, evento: 'enviado', compraId, item });
+  return { enviadoEm, url: page.url() };
+}
+
+// ---------------------------------------------------------------------------
+// limparCampo — esvazia o campo de resposta. Idempotente: não erra se já
+// vazio ou se a página atual não tem o seletor.
+// ---------------------------------------------------------------------------
+async function limparCampo(page, compraId, item, motivo = 'manual') {
+  if (!SEL_MSG.campoResposta) return { limpoEm: new Date().toISOString(), notado: 'sem-seletor' };
+  try {
+    const el = await page.$(SEL_MSG.campoResposta);
+    if (el) {
+      await page.fill(SEL_MSG.campoResposta, '');
+    }
+  } catch (e) {
+    // ignora — pode ter saído da página, etc
+  }
+  const limpoEm = new Date().toISOString();
+  _logResposta({ ts: limpoEm, evento: 'cancelado', modo: motivo, compraId, item });
+  return { limpoEm };
+}
+
+// ---------------------------------------------------------------------------
 // responderMensagem — envia (ou só preenche, em dry-run) resposta ao pregoeiro
 //
 // Em dry-run, o texto é digitado no campo mas NUNCA é submetido — o usuário
@@ -442,6 +508,9 @@ module.exports = {
   responderMensagem,
   _calcularAssinaturaMsgs,
   obterUltimaAssinaturaMsg,
+  preencherSemEnviar,
+  enviarPreenchido,
+  limparCampo,
   lerPropostasPregao,
   verificarSessao,
   SEL,
