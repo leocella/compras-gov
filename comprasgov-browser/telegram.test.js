@@ -132,3 +132,37 @@ test('setResponderCallback armazena a função para uso futuro', () => {
   // Apenas verificar que não lança erro — execução real é via callback_query
   assert.strictEqual(chamado, false, 'callback não deve ser invocado só pelo setter');
 });
+
+test('_persistirPreenchidos grava o Map sem timeoutId', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const t = loadFresh();
+  t.init('tok:abc', '999');
+
+  const tmpFile = path.join(require('node:os').tmpdir(), `preench-${Date.now()}.json`);
+  t._setPreenchidosFile(tmpFile);
+
+  t._preenchidosPendentes.set('AAA', {
+    compraId: 'C1', item: '11', texto: 'olá',
+    timeoutId: setTimeout(()=>{}, 60_000),
+    lastMessageSig: 'abc',
+  });
+  t._persistirPreenchidos();
+  const conteudo = JSON.parse(fs.readFileSync(tmpFile, 'utf8'));
+  assert.strictEqual(conteudo.AAA.compraId, 'C1');
+  assert.strictEqual(conteudo.AAA.texto, 'olá');
+  assert.strictEqual(conteudo.AAA.timeoutId, undefined);
+
+  // cleanup
+  clearTimeout(t._preenchidosPendentes.get('AAA').timeoutId);
+  fs.unlinkSync(tmpFile);
+});
+
+test('_carregarPreenchidos lê e devolve objeto vazio se arquivo não existe', () => {
+  const path = require('node:path');
+  const t = loadFresh();
+  t.init('tok:abc', '999');
+  t._setPreenchidosFile(path.join(require('node:os').tmpdir(), `inexistente-${Date.now()}.json`));
+  const r = t._carregarPreenchidos();
+  assert.deepStrictEqual(r, {});
+});

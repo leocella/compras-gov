@@ -20,6 +20,38 @@ const MAX_CONTEXTO = 200;
 // usado pelo fluxo de confirmação com inline keyboard.
 const _pendentesConfirmacao = new Map();
 
+// Novo fluxo: Map<callbackId, { compraId, uasg, item, texto, chatId,
+//   etapa1MsgId, etapa2MsgId, preenchidoEm, lastMessageSig, timeoutId }>
+const _preenchidosPendentes = new Map();
+
+// Caminho do arquivo de persistência (configurável p/ testes)
+let _preenchidosFile = path.join(__dirname, 'dados', 'preenchidos-pendentes.json');
+function _setPreenchidosFile(p) { _preenchidosFile = p; }
+
+function _persistirPreenchidos() {
+  const obj = {};
+  for (const [k, v] of _preenchidosPendentes.entries()) {
+    const { timeoutId, ...semHandle } = v;
+    obj[k] = semHandle;
+  }
+  try {
+    fs.mkdirSync(path.dirname(_preenchidosFile), { recursive: true });
+    fs.writeFileSync(_preenchidosFile, JSON.stringify(obj, null, 2), 'utf8');
+  } catch (e) {
+    console.error('[telegram] falha ao persistir preenchidos:', e.message);
+  }
+}
+
+function _carregarPreenchidos() {
+  if (!fs.existsSync(_preenchidosFile)) return {};
+  try {
+    return JSON.parse(fs.readFileSync(_preenchidosFile, 'utf8'));
+  } catch (e) {
+    console.error('[telegram] preenchidos-pendentes.json corrompido:', e.message);
+    return {};
+  }
+}
+
 // Callback injetado pelo server.js para executar o envio ao pregoeiro
 // quando o usuário confirma via Telegram. Recebe (ctx, texto) e
 // retorna o resultado da chamada a responderMensagem.
@@ -571,4 +603,8 @@ module.exports = {
   _gerarCallbackId,
   _pregoeiroContexto,
   _pendentesConfirmacao,
+  _preenchidosPendentes,
+  _setPreenchidosFile,
+  _persistirPreenchidos,
+  _carregarPreenchidos,
 };
