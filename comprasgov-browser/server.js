@@ -8,7 +8,10 @@ const express = require('express');
 const { chromium } = require('playwright');
 const { chromium: chromiumStealth } = require('playwright-extra');
 chromiumStealth.use(require('puppeteer-extra-plugin-stealth')());
-const { tirarScreenshot, rasparItensPregao, lerMensagensChat, responderMensagem, lerPropostasPregao } = require('./comprasgov');
+const {
+  tirarScreenshot, rasparItensPregao, lerMensagensChat, responderMensagem, lerPropostasPregao,
+  preencherSemEnviar, enviarPreenchido, limparCampo, obterUltimaAssinaturaMsg, capturarScreenshotChat,
+} = require('./comprasgov');
 const { buscarItensPregaoApi, listarContratacoesRecentes } = require('./pncp-api');
 const { salvar, listarRaspagens, DADOS_DIR }              = require('./storage');
 const sessao = require('./sessao');
@@ -705,14 +708,32 @@ app.post('/pregao/propostas', async (req, res) => {
   if (process.env.TELEGRAM_TOKEN) {
     try {
       telegram.init(process.env.TELEGRAM_TOKEN, process.env.TELEGRAM_CHAT_ID);
-      telegram.setResponderCallback(async (ctx, texto) => {
-        if (!pageSessao) {
-          throw new Error('Sessão pageSessao não ativa — chame POST /sessao/iniciar primeiro');
+      // Novo fluxo de dupla confirmação: preencher → screenshot → enviar
+      telegram.setPreencherCallback(async (ctx, texto) => {
+        if (!pageSessao) throw new Error('Sessão pageSessao não ativa');
+        if (!ctx.item || ctx.item === '?') throw new Error('Item ausente — uso: /responder <compraId> <item> <texto>');
+        const r   = await preencherSemEnviar(pageSessao, ctx.compraId, ctx.item, texto);
+        const buf = await capturarScreenshotChat(pageSessao);
+        return { lastMessageSig: r.lastMessageSig, screenshotBuffer: buf, preenchidoEm: r.preenchidoEm };
+      });
+
+      telegram.setEnviarPreenchidoCallback(async (ctx, sigOriginal) => {
+        if (!pageSessao) throw new Error('Sessão pageSessao não ativa');
+        const sigAtual = await obterUltimaAssinaturaMsg(pageSessao, ctx.compraId, ctx.item);
+        const houveNovaMsg = !!(sigAtual && sigOriginal && sigAtual !== sigOriginal);
+        if (houveNovaMsg) {
+          const cg = require('./comprasgov');
+          if (cg._logRespostaRaceDetected) {
+            cg._logRespostaRaceDetected({ compraId: ctx.compraId, item: ctx.item, sigOrig: sigOriginal, sigNovo: sigAtual });
+          }
         }
-        if (!ctx.item || ctx.item === '?') {
-          throw new Error('Item da mensagem não identificado — contexto incompleto, responda manualmente via VNC');
-        }
-        return responderMensagem(pageSessao, ctx.compraId, ctx.item, texto);
+        const r = await enviarPreenchido(pageSessao, ctx.compraId, ctx.item);
+        return { enviadoEm: r.enviadoEm, houveNovaMsg };
+      });
+
+      telegram.setLimparCampoCallback(async (ctx, motivo) => {
+        if (!pageSessao) return { limpoEm: new Date().toISOString(), notado: 'sem-sessao' };
+        return limparCampo(pageSessao, ctx.compraId, ctx.item, motivo);
       });
 
       // /retomar via Telegram → retoma lote pausado usando aba logada do Chrome
@@ -747,6 +768,28 @@ app.post('/pregao/propostas', async (req, res) => {
         return `🔄 <b>Retomando lote</b>: ${alvos.length} compra(s) pendente(s). Notificações de progresso aqui.`;
       });
       telegram.iniciarPolling();
+
+      // Boot cleanup: limpa campos preenchidos pendentes (resiliência a reboot)
+      const pendentes = telegram._carregarPreenchidos();
+      const keys = Object.keys(pendentes);
+      if (keys.length > 0) {
+        console.log(`[boot] ${keys.length} preenchidos pendentes — limpando campos por segurança`);
+        for (const k of keys) {
+          const p = pendentes[k];
+          if (pageSessao) {
+            try {
+              await limparCampo(pageSessao, p.compraId, p.item, 'boot-cleanup');
+            } catch (e) {
+              console.error(`[boot] falha ao limpar ${p.compraId}/${p.item}: ${e.message}`);
+            }
+          }
+        }
+        try {
+          fs.unlinkSync(path.join(__dirname, 'dados', 'preenchidos-pendentes.json'));
+        } catch { /* ignora se não conseguir */ }
+        await telegram.enviar(`🔄 Server reiniciado — ${keys.length} preenchimento(s) pendente(s) foram limpos por segurança`);
+      }
+
       agendador.init({
         telegram,
         getPage:        () => page,
