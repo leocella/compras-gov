@@ -89,3 +89,40 @@ test('parsearLinhasPropostas aceita valor null/undefined em campos opcionais', (
   assert.strictEqual(r[0].valorProposta, null);
   assert.strictEqual(r[0].marca, '');
 });
+
+const { _calcularAssinaturaMsgs } = require('./comprasgov');
+
+test('_calcularAssinaturaMsgs retorna null para array vazio', () => {
+  assert.strictEqual(_calcularAssinaturaMsgs([]), null);
+  assert.strictEqual(_calcularAssinaturaMsgs(null), null);
+  assert.strictEqual(_calcularAssinaturaMsgs(undefined), null);
+});
+
+test('_calcularAssinaturaMsgs ignora mensagens próprias (do Rafael)', () => {
+  const msgs = [
+    { propria: true,  dataHora: '2026-05-20 10:00', texto: 'minha resposta' },
+    { propria: false, dataHora: '2026-05-20 10:01', texto: 'msg do pregoeiro' },
+  ];
+  const sigComProprias    = _calcularAssinaturaMsgs(msgs);
+  const sigSemProprias    = _calcularAssinaturaMsgs(msgs.filter(m => !m.propria));
+  assert.strictEqual(sigComProprias, sigSemProprias);
+});
+
+test('_calcularAssinaturaMsgs muda quando pregoeiro adiciona nova mensagem', () => {
+  const msgs1 = [{ propria: false, dataHora: '10:00', texto: 'A' }];
+  const msgs2 = [
+    { propria: false, dataHora: '10:00', texto: 'A' },
+    { propria: false, dataHora: '10:05', texto: 'B' },
+  ];
+  assert.notStrictEqual(_calcularAssinaturaMsgs(msgs1), _calcularAssinaturaMsgs(msgs2));
+});
+
+test('_calcularAssinaturaMsgs é determinística para o mesmo input', () => {
+  const msgs = [{ propria: false, dataHora: '10:00', texto: 'oi' }];
+  assert.strictEqual(_calcularAssinaturaMsgs(msgs), _calcularAssinaturaMsgs(msgs));
+});
+
+test('_calcularAssinaturaMsgs retorna hex de 16 chars', () => {
+  const sig = _calcularAssinaturaMsgs([{ propria: false, dataHora: 'x', texto: 'y' }]);
+  assert.match(sig, /^[0-9a-f]{16}$/);
+});

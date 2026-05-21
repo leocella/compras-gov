@@ -1,5 +1,7 @@
 'use strict';
 
+const crypto = require('crypto');
+
 // ---------------------------------------------------------------------------
 // Seletores — busca pública (sem login)
 // ---------------------------------------------------------------------------
@@ -221,6 +223,19 @@ async function lerMensagensItem(page, compraId, item) {
 }
 
 // ---------------------------------------------------------------------------
+// _calcularAssinaturaMsgs — função pura: sha1(JSON) das mensagens do pregoeiro
+// (filtra propria=true). Usada em race detection entre etapas do fluxo de
+// resposta com dupla confirmação. Retorna null para input vazio.
+// ---------------------------------------------------------------------------
+function _calcularAssinaturaMsgs(msgs) {
+  if (!Array.isArray(msgs) || msgs.length === 0) return null;
+  const doPregoeiro = msgs.filter(m => m && m.propria === false)
+                          .map(m => ({ dataHora: m.dataHora || '', texto: m.texto || '' }));
+  if (doPregoeiro.length === 0) return null;
+  return crypto.createHash('sha1').update(JSON.stringify(doPregoeiro)).digest('hex').slice(0, 16);
+}
+
+// ---------------------------------------------------------------------------
 // responderMensagem — envia (ou só preenche, em dry-run) resposta ao pregoeiro
 //
 // Em dry-run, o texto é digitado no campo mas NUNCA é submetido — o usuário
@@ -414,6 +429,7 @@ module.exports = {
   lerMensagensChat,
   lerMensagensItem,
   responderMensagem,
+  _calcularAssinaturaMsgs,
   lerPropostasPregao,
   verificarSessao,
   SEL,
