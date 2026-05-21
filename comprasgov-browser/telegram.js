@@ -611,6 +611,36 @@ async function _processarCallbackQuery(cb) {
   const acao       = data.slice(0, sep);
   const callbackId = data.slice(sep + 1);
 
+  // Novo fluxo de dupla confirmação
+  if (acao === 'p') {
+    await _post('answerCallbackQuery', { callback_query_id: cb.id, text: 'Preenchendo...' });
+    await _processarPreencher(callbackId);
+    return;
+  }
+  if (acao === 's') {
+    await _post('answerCallbackQuery', { callback_query_id: cb.id, text: 'Enviando...' });
+    await _processarEnviar(callbackId);
+    return;
+  }
+  if (acao === 'l') {
+    await _post('answerCallbackQuery', { callback_query_id: cb.id, text: 'Limpando...' });
+    await _processarLimpar(callbackId, 'manual');
+    return;
+  }
+  // Cancelar etapa 1 do novo fluxo (entry está em _preenchidosPendentes, não _pendentesConfirmacao)
+  if (acao === 'x' && _preenchidosPendentes.has(callbackId)) {
+    const pend = _preenchidosPendentes.get(callbackId);
+    if (pend.etapa1MsgId) {
+      await _post('editMessageText', {
+        chat_id: pend.chatId, message_id: pend.etapa1MsgId, text: '❌ Cancelado',
+      }).catch(()=>{});
+    }
+    _preenchidosPendentes.delete(callbackId);
+    _persistirPreenchidos();
+    await _post('answerCallbackQuery', { callback_query_id: cb.id });
+    return;
+  }
+
   const pendente = _pendentesConfirmacao.get(callbackId);
   if (!pendente) {
     await _post('answerCallbackQuery', { callback_query_id: cb.id, text: 'Pedido expirou' });
@@ -680,17 +710,17 @@ async function _processarSlashRetomar(chatId) {
 }
 
 async function _processarSlashResponder(texto, chatId) {
-  const m = texto.match(/^\/responder\s+(\S+)\s+([\s\S]+)$/);
+  const m = texto.match(/^\/responder\s+(\S+)\s+(\S+)\s+([\s\S]+)$/);
   if (!m) {
     await _post('sendMessage', {
       chat_id: chatId,
-      text:    'Uso: /responder <compraId> <texto>',
+      text:    'Uso: /responder <compraId> <item> <texto>',
     });
     return;
   }
-  const [, compraId, respTexto] = m;
-  await _solicitarConfirmacao(
-    { compraId, uasg: '?', item: '?' },
+  const [, compraId, item, respTexto] = m;
+  await _solicitarPreenchimento(
+    { compraId, uasg: '?', item },
     respTexto.trim(),
     chatId,
   );
@@ -737,7 +767,7 @@ async function iniciarPolling() {
             const replyId = msg.reply_to_message?.message_id;
             if (replyId && _pregoeiroContexto.has(replyId)) {
               const ctx = _pregoeiroContexto.get(replyId);
-              await _solicitarConfirmacao(ctx, texto, chatId);
+              await _solicitarPreenchimento(ctx, texto, chatId);
               continue;
             }
 
