@@ -236,6 +236,17 @@ function _calcularAssinaturaMsgs(msgs) {
 }
 
 // ---------------------------------------------------------------------------
+// obterUltimaAssinaturaMsg — lê o chat e devolve a assinatura sha1 das msgs
+// do pregoeiro. Usada em duas situações:
+//   1. ao preencher (etapa 1) — captura baseline
+//   2. ao enviar (etapa 2)    — re-captura e compara com baseline
+// ---------------------------------------------------------------------------
+async function obterUltimaAssinaturaMsg(page, compraId, item) {
+  const { mensagens } = await lerMensagensItem(page, compraId, item);
+  return _calcularAssinaturaMsgs(mensagens);
+}
+
+// ---------------------------------------------------------------------------
 // responderMensagem — envia (ou só preenche, em dry-run) resposta ao pregoeiro
 //
 // Em dry-run, o texto é digitado no campo mas NUNCA é submetido — o usuário
@@ -430,6 +441,7 @@ module.exports = {
   lerMensagensItem,
   responderMensagem,
   _calcularAssinaturaMsgs,
+  obterUltimaAssinaturaMsg,
   lerPropostasPregao,
   verificarSessao,
   SEL,
