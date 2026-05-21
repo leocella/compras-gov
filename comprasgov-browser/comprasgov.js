@@ -357,14 +357,10 @@ async function capturarScreenshotChat(page, opts = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// responderMensagem — envia (ou só preenche, em dry-run) resposta ao pregoeiro
-//
-// Em dry-run, o texto é digitado no campo mas NUNCA é submetido — o usuário
-// revisa via VNC e clica enviar manualmente. Default vem de
-// process.env.TELEGRAM_RESPONDER_DRY_RUN.
-//
-// Toda invocação é registrada em dados/respostas-pregoeiro.log para auditoria
-// (chat com órgão público).
+// responderMensagem — envia resposta ao pregoeiro (legacy, mantido para uso
+// CLI/fallback). O Telegram agora usa o fluxo de dupla confirmação
+// (preencherSemEnviar + enviarPreenchido). Toda invocação é registrada em
+// dados/respostas-pregoeiro.log para auditoria (chat com órgão público).
 // ---------------------------------------------------------------------------
 const fs   = require('fs');
 const path = require('path');
@@ -386,16 +382,10 @@ async function responderMensagem(page, compraId, item, texto, opts = {}) {
   if (!compraId) throw new Error('responderMensagem: compraId obrigatório');
   if (!item)     throw new Error('responderMensagem: item obrigatório (número do item)');
   if (!texto)    throw new Error('responderMensagem: texto obrigatório');
-
-  const dryRun = opts.dryRun ?? (process.env.TELEGRAM_RESPONDER_DRY_RUN === 'true');
-
   if (!SEL_MSG.campoResposta || !SEL_MSG.botaoEnviar) {
-    const erro = 'SEL_MSG.campoResposta ou SEL_MSG.botaoEnviar vazio';
-    _logResposta({ compraId, item, texto, modo: dryRun ? 'dry-run' : 'auto', erro });
-    throw new Error(erro);
+    throw new Error('SEL_MSG.campoResposta ou SEL_MSG.botaoEnviar vazio');
   }
 
-  // Navega para a página do item — o form de resposta só existe nesse contexto
   const targetUrl = SEL_MSG.urlChatItem
     .replace('{item}',  String(item))
     .replace('{compra}', String(compraId));
@@ -405,30 +395,20 @@ async function responderMensagem(page, compraId, item, texto, opts = {}) {
       await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
       await page.waitForTimeout(3000);
     }
-
     if (page.url().includes('login')) {
-      throw new Error('Sessão expirada — faça login via POST /sessao/iniciar');
+      throw new Error('Sessão expirada — relogar via VNC');
     }
 
     await page.waitForSelector(SEL_MSG.campoResposta, { timeout: 10_000 });
     await page.fill(SEL_MSG.campoResposta, texto);
-
-    if (dryRun) {
-      _logResposta({ compraId, item, texto, modo: 'dry-run', preenchido: true });
-      return { sucesso: true, modo: 'dry-run', preenchido: true, enviadoEm: null, url: page.url() };
-    }
-
     await page.click(SEL_MSG.botaoEnviar);
     await page.waitForLoadState('networkidle');
     const enviadoEm = new Date().toISOString();
-    _logResposta({ compraId, item, texto, modo: 'auto', enviadoEm });
-    return { sucesso: true, modo: 'auto', enviadoEm, url: page.url() };
+    _logResposta({ ts: enviadoEm, evento: 'enviado', compraId, item, texto, modo: 'legacy-auto' });
+    return { sucesso: true, enviadoEm, url: page.url() };
   } catch (e) {
-    _logResposta({ compraId, item, texto, modo: dryRun ? 'dry-run' : 'auto', erro: e.message });
-    throw new Error(
-      `Erro ao ${dryRun ? 'preencher' : 'enviar'} resposta no item ${item} da compra ${compraId}. ` +
-      `Use GET /screenshot?sessao=1 para inspecionar. Erro: ${e.message}`,
-    );
+    _logResposta({ ts: new Date().toISOString(), evento: 'erro', compraId, item, texto, erro: e.message });
+    throw new Error(`Erro ao enviar resposta no item ${item} da compra ${compraId}: ${e.message}`);
   }
 }
 
