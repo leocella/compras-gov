@@ -278,3 +278,28 @@ test('_processarLimpar chama _onLimparCampo, cancela timeout e edita msg', async
   assert.strictEqual(t._preenchidosPendentes.has(cbId), false);
   await new Promise(r => setTimeout(r, 150));
 });
+
+test('_parseItens aceita lista simples', () => {
+  const t = loadFresh();
+  assert.deepEqual(t._parseItens('3,5,7'), [3, 5, 7]);
+});
+
+test('_parseItens expande intervalo', () => {
+  const t = loadFresh();
+  assert.deepEqual(t._parseItens('3-7'), [3, 4, 5, 6, 7]);
+});
+
+test('_parseItens combina lista e intervalo, ordenado e sem duplicar', () => {
+  const t = loadFresh();
+  assert.deepEqual(t._parseItens('1-3,5,8'), [1, 2, 3, 5, 8]);
+  assert.deepEqual(t._parseItens('3,3,5'), [3, 5]);
+});
+
+test('_parseItens rejeita entradas inválidas', () => {
+  const t = loadFresh();
+  assert.throws(() => t._parseItens(''), /vazia/i);
+  assert.throws(() => t._parseItens('abc'), /inválido/i);
+  assert.throws(() => t._parseItens('7-3'), /invertido/i);
+  assert.throws(() => t._parseItens('0'), /faixa/i);
+  assert.throws(() => t._parseItens('201'), /faixa/i);
+});

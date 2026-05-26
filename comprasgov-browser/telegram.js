@@ -685,6 +685,34 @@ async function _processarCallbackQuery(cb) {
   }
 }
 
+function _parseItens(spec) {
+  if (typeof spec !== 'string' || !spec.trim()) {
+    throw new Error('Lista de itens vazia. Ex: 3,5,7 ou 3-7');
+  }
+  const out = new Set();
+  for (const parte of spec.split(',')) {
+    const p = parte.trim();
+    if (!p) continue;
+    const range = p.match(/^(\d+)-(\d+)$/);
+    if (range) {
+      const ini = parseInt(range[1], 10);
+      const fim = parseInt(range[2], 10);
+      if (ini > fim) throw new Error(`Intervalo invertido: ${p}`);
+      for (let n = ini; n <= fim; n++) out.add(n);
+    } else if (/^\d+$/.test(p)) {
+      out.add(parseInt(p, 10));
+    } else {
+      throw new Error(`Item inválido: "${p}"`);
+    }
+  }
+  const itens = [...out].sort((a, b) => a - b);
+  if (itens.length === 0) throw new Error('Nenhum item válido informado.');
+  for (const n of itens) {
+    if (n < 1 || n > 200) throw new Error(`Item fora da faixa 1-200: ${n}`);
+  }
+  return itens;
+}
+
 async function _processarSlashRetomar(chatId) {
   if (!_onRetomar) {
     await _post('sendMessage', {
@@ -820,6 +848,7 @@ module.exports = {
   _registrarContextoPregoeiro,
   _processarSlashResponder,
   _processarSlashRetomar,
+  _parseItens,
   _processarCallbackQuery,
   _solicitarConfirmacao,
   _formatarPreview,
