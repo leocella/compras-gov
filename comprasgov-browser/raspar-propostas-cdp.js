@@ -338,7 +338,11 @@ async function reconDetalhes(page) {
 // ---------------------------------------------------------------------------
 // Gerar .xlsx formatado
 // ---------------------------------------------------------------------------
-async function gerarExcel(resultados, compraId) {
+function _nomeArquivoExcel(compraId, sufixo) {
+  return `Resultados_CN_${compraId}_${sufixo || 'RASPAGEM'}.xlsx`;
+}
+
+async function gerarExcel(resultados, compraId, opts = {}) {
   ensureDir(DADOS_DIR);
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet('Exportação de resultados');
@@ -444,7 +448,7 @@ async function gerarExcel(resultados, compraId) {
     }
   }
 
-  const nome = `Resultados_CN_${compraId}_RASPAGEM.xlsx`;
+  const nome = _nomeArquivoExcel(compraId, opts.sufixo);
   const caminho = path.join(DADOS_DIR, nome);
   await wb.xlsx.writeFile(caminho);
   log(`\n✅ Excel: ${caminho}`);
@@ -632,6 +636,7 @@ module.exports = {
   expandirCardsECapturarDetalhes,
   reconDetalhes,
   gerarExcel,
+  _nomeArquivoExcel,
   salvarSnapshot,
   hoje,
   sleep,
