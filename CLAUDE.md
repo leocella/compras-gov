@@ -94,85 +94,121 @@ O node "Preparar Dados e Prompt" lê por nome de coluna **OU** por letra (fallba
 ## PROJETO 2 — ComprasGov Automation (em desenvolvimento)
 
 Responsável: Leo (desenvolvimento) + Rafael (cliente/usuário)
-Status: **RODADA API IMPLEMENTADA** — endpoints REST sem browser funcionando. Playwright mantido para rodada de mensagens (login).
+Status: **RASPAGEM + LOTE + TELEGRAM IMPLEMENTADOS** — raspagem de propostas via CDP (Chrome logado do Rafael), execução em lote com retomada, bot Telegram com `/responder`, `/retomar` e `/raspar`. Validação ao vivo recorrente com o Rafael.
 
-- Pasta `comprasgov-browser/` criada com server Express + Playwright (`/status`, `/screenshot`, `/pregao/itens` com mutex e validação 400/409). 8 testes unitários passando para `extrairMarcas`.
+Histórico das abordagens (importante para não repetir caminhos já descartados):
 - **Raspagem HTML descartada:** o portal `cnetmobile.estaleiro.serpro.gov.br` tem reCAPTCHA agressivo que bloqueia XHR mesmo com browser headed. Confirmado em recon (3 rodadas).
-- **Rodada API implementada:** novo módulo `pncp-api.js` acessa a API REST pública `https://pncp.gov.br/api/pncp/v1` — sem CAPTCHA, sem login, ~1s por chamada. Dois novos endpoints no servidor: `POST /api/itens` e `GET /api/contratacoes`.
-- **Playwright fica para a rodada de mensagens** (login no chat do pregão — esse caso exige browser real).
-- Spec rodada 1: `docs/superpowers/specs/2026-04-28-comprasgov-raspagem-itens-design.md`
-- Plan rodada 1: `docs/superpowers/plans/2026-04-28-comprasgov-raspagem-itens.md`
+- **API pública PNCP/DadosAbertos** (`pncp-api.js`, `dadosabertos-api.js`): dados de contratações sem login/CAPTCHA — bom para listar pregões/itens do edital, mas **não** traz as propostas dos concorrentes.
+- **Raspagem de propostas via CDP é a abordagem viva:** `raspar-propostas-cdp.js` conecta no Chrome **real e já logado** do Rafael (porta 9222) e raspa as propostas item a item pela rota logada `/seguro/fornecedor/` (reCAPTCHA estável, sessão persiste). Login é sempre manual.
+- **Mensagens ao pregoeiro:** fluxo de dupla confirmação (preenche o campo → screenshot → usuário confirma no Telegram → envia). Spec: `docs/superpowers/specs/2026-05-20-resposta-pregoeiro-dupla-confirmacao-design.md`.
+- **Raspagem avulsa de itens:** comando `/raspar` no Telegram. Spec: `docs/superpowers/specs/2026-05-26-comprasgov-raspar-itens-avulso-telegram-design.md`.
+- Specs/plans anteriores: `docs/superpowers/specs/` e `docs/superpowers/plans/` (rodada de raspagem de itens 2026-04-28; arquitetura em `comprasgov-browser/docs/ARQUITETURA.md`).
 
 ### O que este projeto faz:
-Automação do portal ComprasGov (comprasnet.gov.br) via Playwright. Um servidor Node.js local
-(porta 3099) controla um Chrome, lê mensagens de pregões e envia respostas via API REST.
-O n8n do Rafael chama esse servidor via webhook interno.
+Automação do portal ComprasGov (comprasnet.gov.br). Um servidor Node.js local (porta 3099)
+conecta-se via CDP ao Chrome **já logado** do Rafael para: (1) raspar as propostas dos itens
+de um pregão e gerar Excel; (2) ler mensagens do chat do pregão e responder ao pregoeiro com
+dupla confirmação. O operador comanda tudo pelo **Telegram**; o agendador roda raspagem diária
+e polling de mensagens. O n8n do Rafael pode chamar os endpoints REST públicos (PNCP).
 
-Referência técnica do portal: `manual-tecnico-comprasgov.docx` (na raiz).
+Referência técnica do portal: `manual-tecnico-comprasgov.docx` (na raiz). Arquitetura detalhada:
+`comprasgov-browser/docs/ARQUITETURA.md`.
 
 ### Stack:
 - **Runtime:** Node.js 20+
-- **Automação:** Playwright (browser Chromium)
+- **Automação:** Playwright conectado via **CDP** ao Chrome real do usuário (`connectOverCDP('http://127.0.0.1:9222')`) — não sobe browser próprio, reusa a sessão logada.
 - **Servidor:** Express.js (porta 3099, apenas localhost)
+- **Bot:** Telegram via long-polling (`telegram.js`)
+- **Agendador:** node-cron (`agendador.js`)
+- **Excel:** ExcelJS
+- **APIs públicas:** PNCP (`pncp-api.js`), DadosAbertos ComprasNet (`dadosabertos-api.js`)
 - **Tela virtual (VPS):** Xvfb + x11vnc (apenas na VPS, não no local)
-- **Gerenciador de processo (VPS):** systemd
 
 ### Estrutura atual (pasta `comprasgov-browser/`):
 ```
 comprasgov-browser/
-├── server.js              ← Express + ciclo de vida Chromium + endpoints browser e API REST
-├── comprasgov.js          ← lógica Playwright + objeto SEL + extrairMarcas
-├── pncp-api.js            ← API REST pública PNCP (sem browser, sem login) ✅ novo
-├── smoke-api.js           ← smoke test standalone para pncp-api.js
-├── comprasgov.test.js     ← 8 testes unitários (extrairMarcas)
-├── package.json           ← deps: express, playwright (Node 20+)
-├── .gitignore             ← node_modules/, sessions/, *.log
-├── package-lock.json
-└── (futuro) setup.sh + sessions/  ← rodada mensagens (VPS)
+├── server.js                ← Express :3099 + ciclo de vida do Chrome (CDP) + endpoints + boot do Telegram/agendador
+├── comprasgov.js            ← lógica Playwright: objeto SEL, extrairMarcas, verificarSessao, fluxo de resposta ao pregoeiro
+├── raspar-propostas-cdp.js  ← motor de raspagem de propostas via CDP + gerarExcel + salvarSnapshot (núcleo vivo)
+├── lote-runner.js           ← executarLote (varredura completa) + rasparItensEspecificos (avulso /raspar)
+├── lote-estado.js           ← persistência de progresso do lote (dados/lote-estado.json), status RODANDO/PAUSADO/...
+├── raspar-lote.js           ← CLI: dispara um lote a partir de compras-alvo.json
+├── agendador.js             ← node-cron: scraping diário (HORA_SCRAPING) + polling de mensagens (5min, 08-18h, seg-sex)
+├── telegram.js              ← bot long-polling: /responder, /retomar, /raspar + dupla confirmação + envio de Excel
+├── pncp-api.js              ← API REST pública PNCP (sem browser, sem login)
+├── dadosabertos-api.js      ← API DadosAbertos ComprasNet (sem browser, sem login)
+├── compras-alvo.json        ← lista de compras a raspar no lote (uasg, tipo, numero, compraId, totalItens)
+├── comprasgov.test.js / telegram.test.js / agendador.test.js / raspar-propostas-cdp.test.js  ← testes (node --test)
+├── dados/                   ← saídas: Excel (Resultados_CN_*.xlsx), snapshots, logs, lote-estado.json
+├── docs/ARQUITETURA.md      ← arquitetura detalhada
+├── *.bat                    ← install.bat, raspar-diario.bat, monitorar-lote.bat (abrem Chrome c/ CDP e rodam)
+└── package.json / package-lock.json
 ```
+
+> ⚠️ `npm test` **trava** por causa do `agendador.test.js` (cron mantém o event loop aberto). Para verificar mudanças, rode os arquivos direto, ex.:
+> `node --test comprasgov.test.js telegram.test.js raspar-propostas-cdp.test.js`
+
+### Comandos do bot Telegram:
+```
+/responder <compraId> <item> <texto>  → resposta ao pregoeiro com dupla confirmação (preenche → screenshot → confirma → envia)
+/retomar                              → retoma o lote pausado (compras pendentes de compras-alvo.json)
+/raspar <compraId> <itens>            → raspa só os itens pedidos (ex: 3,5,7 ou 3-7) → Excel só com eles
+```
+Todos usam a aba **logada** do Chrome (`/comprasnet-web/seguro/`). `/raspar` recusa se um lote estiver RODANDO (aba é compartilhada).
 
 ### API do servidor (porta 3099, bind 127.0.0.1):
 ```
-GET  /status        → { online, browserPronto, url }                    ✅ implementado (browser)
-GET  /screenshot    → PNG base64 da página atual (debug)                ✅ implementado (browser)
-POST /pregao/itens  → { uasg, numeroPregao } → itens via Playwright    ⚠️  bloqueado por CAPTCHA
+GET  /status            → { online, browserPronto, url }
+GET  /screenshot        → PNG da página atual (debug)
+GET  /api/compras-alvo  → conteúdo de compras-alvo.json
+GET  /api/raspagens     → Excels já gerados em dados/
+POST /api/itens         → { cnpj, ano, sequencial|numeroCompra } → itens (REST público, sem browser)
+GET  /api/contratacoes  → ?dataInicial&dataFinal&pagina → lista pregões (REST público, sem browser)
+POST /pregao/itens      → { uasg, numeroPregao } via Playwright   ⚠️ bloqueado por CAPTCHA (legado)
+```
 
-POST /api/itens     → { cnpj, ano, sequencial|numeroCompra } → itens   ✅ implementado (REST, sem browser)
-GET  /api/contratacoes → ?dataInicial&dataFinal&pagina → lista pregões  ✅ implementado (REST, sem browser)
-
-POST /mensagens/ler       → (rodada mensagens: precisa de login)        ⏳ pendente
-POST /mensagens/responder → (rodada mensagens: precisa de login)        ⏳ pendente
+### Nomes de Excel gerados (em `dados/`):
+```
+Resultados_CN_<compraId>_RASPAGEM.xlsx              ← lote / raspagem completa
+Resultados_CN_<compraId>_ITENS_<n>-<n>_<ts>.xlsx    ← raspagem avulsa via /raspar (não sobrescreve o do lote)
 ```
 
 ### Arquitetura de comunicação:
 ```
-Lovable (web) → n8n webhook (internet) → browser/server.js (localhost:3099) → Playwright → Chrome → ComprasGov
+Telegram (Rafael) ─┐
+n8n/Lovable webhook ┼→ server.js (localhost:3099) → Playwright/CDP → Chrome logado do Rafael → ComprasGov
+agendador (cron) ──┘
 ```
 
-### Regras para trabalhar no Playwright:
-1. **Desenvolver local primeiro** — sempre `headless: false` durante desenvolvimento
-2. **Usar codegen para capturar seletores:** `npx playwright codegen https://comprasnet.gov.br`
-3. **Login é manual** — nunca automatizar login (Gov.br tem CAPTCHA/certificado)
-4. **Salvar sessão** via `storageState` após login manual para reutilizar
-5. **Só migrar para VPS** quando o script funcionar 100% local
-6. **Pasta `browser/`** é isolada — não criar arquivos fora dela para este projeto
+### Regras para trabalhar no Playwright/CDP:
+1. **Login é sempre manual** — nunca automatizar login (Gov.br tem CAPTCHA/certificado).
+2. **Conectar, não subir browser** — usa `connectOverCDP('http://127.0.0.1:9222')` no Chrome real já logado do Rafael. Não usar `storageState` nem browser headless próprio: a sessão vive no Chrome do usuário.
+3. **Rota logada** — raspar pela rota `/comprasnet-web/seguro/fornecedor/` (reCAPTCHA estável); a rota `/public/` cai por hCaptcha.
+4. **Não atropelar a aba compartilhada** — lote e `/raspar` usam a mesma aba logada; respeitar o lock e o status do lote.
+5. **Desenvolver local primeiro**, depois VPS.
+6. **Pasta `comprasgov-browser/`** é isolada — não criar arquivos deste projeto fora dela.
 
 ### Workflow de desenvolvimento:
 ```
-1. npx playwright codegen <url>   ← captura cliques e gera código
-2. node browser/server.js         ← testa o servidor local
-3. curl POST localhost:3099/...   ← valida os endpoints
-4. scp browser/ user@VPS:/tmp/    ← migra só quando validado
-5. bash setup.sh                  ← instala na VPS
+1. Abrir Chrome com CDP + fazer login manual:
+   chrome.exe --remote-debugging-port=9222 --user-data-dir="C:\temp\chrome-debug-rafael"
+   (atalhos: comprasgov-browser/raspar-diario.bat, monitorar-lote.bat)
+2. node server.js                 ← sobe o servidor + bot + agendador (precisa do .env)
+3. testar pelo Telegram (/raspar, /retomar, /responder) ou curl localhost:3099/...
+4. node --test <arquivos>         ← roda os testes (ver aviso do npm test acima)
 ```
 
-### Login na VPS (após migração):
-```bash
-ssh -L 5900:localhost:5900 user@IP-DA-VPS
-# conecta VNC no localhost:5900
-# faz login manual no ComprasGov
-# sessão fica salva em /opt/comprasgov-session/
+### Variáveis de ambiente (`comprasgov-browser/.env`):
 ```
+TELEGRAM_TOKEN, TELEGRAM_CHAT_ID   ← bot (CHAT_ID aceita múltiplos separados por vírgula)
+HORA_SCRAPING                      ← hora do scraping diário (cron)
+CNPJ_RAFAEL                        ← usado p/ detectar mensagens urgentes e nas APIs públicas
+API_KEY                            ← auth dos endpoints REST
+TELEGRAM_RESPONDER_DRY_RUN         ← legado (fluxo de dupla confirmação já é a salvaguarda)
+```
+
+### Deploy na VPS:
+Pull + restart manual em `/opt/comprasgov-browser` (sem systemd). Login manual no Chrome da VPS via VNC.
 
 ---
 
@@ -182,9 +218,10 @@ ssh -L 5900:localhost:5900 user@IP-DA-VPS
 |----------|----------|
 | Mexer nos workflows n8n? | Use o MCP `n8n-mcp` (carregado via `.mcp.json`). Ignore `claude.json` (legado). |
 | Recriar o workflow simplificado do zero? | `node create_workflow.js` ou `python create_workflow.py` |
-| Criar/editar o servidor Playwright? | Trabalhe **apenas** dentro da pasta `browser/` (ainda não existe — criar) |
-| Testar o Playwright? | **Local primeiro**, headless: false, depois VPS |
-| Subir algo na VPS? | Só após validação local completa |
+| Criar/editar o servidor de raspagem? | Trabalhe **apenas** dentro da pasta `comprasgov-browser/` |
+| Testar o raspador? | **Local primeiro**, com Chrome logado via CDP (9222), depois VPS. `node --test` (não `npm test` — trava no agendador) |
+| Mexer no lote / raspagem avulsa? | Núcleo em `lote-runner.js`; estado em `lote-estado.js`; alvos em `compras-alvo.json` |
+| Subir algo na VPS? | Só após validação local completa (pull + restart em `/opt/comprasgov-browser`) |
 | Dúvida sobre lógica de switch por marca? | Consultar `GPT - Com switch caminhos...json` (export do workflow grande em produção) |
 | Dúvida sobre o portal ComprasGov? | `manual-tecnico-comprasgov.docx` |
 
@@ -192,10 +229,11 @@ ssh -L 5900:localhost:5900 user@IP-DA-VPS
 
 ## Contexto do projeto (para o Claude entender o negócio)
 
-Rafael tem uma empresa de licitações. Ele acompanha pregões eletrônicos no ComprasGov,
-onde precisa ler mensagens do chat do pregão e responder ao pregoeiro. Hoje faz tudo
-manualmente. O objetivo é automatizar essa leitura e resposta via Playwright, controlado
-pelo n8n que já usa, com uma interface web (Lovable) para o Rafael operar.
+Rafael tem uma empresa de licitações. Ele acompanha pregões eletrônicos no ComprasGov, onde
+precisa (1) raspar as propostas dos concorrentes para montar planilhas e (2) ler mensagens do
+chat do pregão e responder ao pregoeiro. Hoje faz tudo manualmente. O objetivo é automatizar
+isso reusando o Chrome logado dele (via CDP), operado pelo Telegram e por um agendador, com o
+n8n/Lovable para orquestração e interface.
 
 O n8n atual já processa itens de licitação via Claude/GPT/Gemini e preenche planilhas.
 Este novo módulo Playwright é uma adição — não substitui nada do que já existe.
