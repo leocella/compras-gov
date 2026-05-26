@@ -19,7 +19,7 @@ const da     = require('./dadosabertos-api');
 const telegram  = require('./telegram');
 const agendador = require('./agendador');
 const loteEstado  = require('./lote-estado');
-const { executarLote } = require('./lote-runner');
+const { executarLote, rasparItensEspecificos } = require('./lote-runner');
 
 const EventEmitter = require('events');
 const bus = new EventEmitter();
@@ -766,6 +766,31 @@ app.post('/pregao/propostas', async (req, res) => {
           .catch(err => console.error('[retomar] erro no executarLote:', err.message));
 
         return `🔄 <b>Retomando lote</b>: ${alvos.length} compra(s) pendente(s). Notificações de progresso aqui.`;
+      });
+
+      // /raspar via Telegram → raspa itens específicos de um pregão na aba logada
+      let _avulsaEmAndamento = false;
+      telegram.setRasparCallback(async ({ compraId, itens }) => {
+        const estado = loteEstado.obterEstado();
+        if (estado && estado.status === loteEstado.STATUS.RODANDO) {
+          return '⏳ Lote rodando agora; aguarde concluir/pausar antes de raspar itens avulsos.';
+        }
+        if (_avulsaEmAndamento) {
+          return '⏳ Já há uma raspagem avulsa em andamento.';
+        }
+
+        const todasAbas = browser ? browser.contexts().flatMap(c => c.pages()) : [];
+        const pageLogada = todasAbas.find(p => p.url().includes('cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/'));
+        if (!pageLogada) {
+          return '⚠️ Nenhuma aba em <code>/seguro/fornecedor/</code> aberta no Chrome.\nFaça login + abra uma compra e mande /raspar de novo.';
+        }
+
+        _avulsaEmAndamento = true;
+        rasparItensEspecificos({ page: pageLogada, compraId, itens, telegram })
+          .catch(err => console.error('[raspar] erro:', err.message))
+          .finally(() => { _avulsaEmAndamento = false; });
+
+        return `🔍 <b>Raspando</b> itens ${itens.join(', ')} de <code>${compraId}</code>… resultado chega aqui.`;
       });
       telegram.iniciarPolling();
 
