@@ -303,3 +303,40 @@ test('_parseItens rejeita entradas inválidas', () => {
   assert.throws(() => t._parseItens('0'), /faixa/i);
   assert.throws(() => t._parseItens('201'), /faixa/i);
 });
+
+test('_processarSlashRaspar chama callback com compraId e itens parseados', async () => {
+  const t = loadFresh();
+  t.init('tok:abc', '999');
+  t._setPostFn(() => Promise.resolve({ ok: true }));
+  let recebido = null;
+  t.setRasparCallback((args) => { recebido = args; return Promise.resolve('ok'); });
+
+  await t._processarSlashRaspar('/raspar 15838305900012026 3,5,7', 999);
+
+  assert.deepEqual(recebido, { compraId: '15838305900012026', itens: [3, 5, 7] });
+});
+
+test('_processarSlashRaspar rejeita compraId com != 17 dígitos', async () => {
+  const t = loadFresh();
+  t.init('tok:abc', '999');
+  const posts = [];
+  t._setPostFn((metodo, payload) => { posts.push(payload); return Promise.resolve({ ok: true }); });
+  let chamou = false;
+  t.setRasparCallback(() => { chamou = true; return Promise.resolve('ok'); });
+
+  await t._processarSlashRaspar('/raspar 123 3,5', 999);
+
+  assert.equal(chamou, false);
+  assert.match(posts[0].text, /17 dígitos/);
+});
+
+test('_processarSlashRaspar responde uso quando faltam args', async () => {
+  const t = loadFresh();
+  t.init('tok:abc', '999');
+  const posts = [];
+  t._setPostFn((metodo, payload) => { posts.push(payload); return Promise.resolve({ ok: true }); });
+
+  await t._processarSlashRaspar('/raspar', 999);
+
+  assert.match(posts[0].text, /Uso: \/raspar/);
+});

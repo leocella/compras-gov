@@ -61,6 +61,12 @@ let _onResponderPregoeiro = null;
 // Recebe (chatId) opcionalmente e retorna string (mensagem para o user).
 let _onRetomar = null;
 
+// Callback injetado pelo server.js para raspagem avulsa de itens (/raspar).
+// Recebe ({ compraId, itens }, chatId) e retorna string (mensagem para o user).
+let _onRaspar = null;
+function setRasparCallback(fn) { _onRaspar = fn; }
+function _getRasparCallback()  { return _onRaspar; }
+
 // Callbacks do novo fluxo de dupla confirmação
 let _onPreencher          = null;
 let _onEnviarPreenchido   = null;
@@ -754,6 +760,42 @@ async function _processarSlashResponder(texto, chatId) {
   );
 }
 
+async function _processarSlashRaspar(texto, chatId) {
+  const m = texto.match(/^\/raspar\s+(\S+)\s+([\s\S]+)$/);
+  if (!m) {
+    await _post('sendMessage', {
+      chat_id: chatId,
+      text:    'Uso: /raspar <compraId> <itens>  (ex: /raspar 15838305900012026 3,5,7)',
+    });
+    return;
+  }
+  const compraId = m[1];
+  if (!/^\d{17}$/.test(compraId)) {
+    await _post('sendMessage', {
+      chat_id: chatId,
+      text:    `❌ compraId deve ter 17 dígitos. Recebi: ${compraId}`,
+    });
+    return;
+  }
+  let itens;
+  try {
+    itens = _parseItens(m[2]);
+  } catch (err) {
+    await _post('sendMessage', { chat_id: chatId, text: `❌ ${err.message}` });
+    return;
+  }
+  if (!_onRaspar) {
+    await _post('sendMessage', { chat_id: chatId, text: '❌ /raspar não configurado neste servidor' });
+    return;
+  }
+  try {
+    const resposta = await _onRaspar({ compraId, itens }, chatId);
+    await _post('sendMessage', { chat_id: chatId, text: resposta || '(sem resposta)', parse_mode: 'HTML' });
+  } catch (err) {
+    await _post('sendMessage', { chat_id: chatId, text: `❌ Erro ao raspar: ${err.message}` });
+  }
+}
+
 async function iniciarPolling() {
   if (_polling) return;
   _polling = true;
@@ -788,6 +830,12 @@ async function iniciarPolling() {
             // 2b) Slash command /retomar (sem args) — retoma lote pausado
             if (texto === '/retomar' || texto.startsWith('/retomar ')) {
               await _processarSlashRetomar(chatId);
+              continue;
+            }
+
+            // 2c) Slash command /raspar <compraId> <itens> — raspagem avulsa
+            if (texto.startsWith('/raspar ') || texto === '/raspar') {
+              await _processarSlashRaspar(texto, chatId);
               continue;
             }
 
@@ -830,6 +878,7 @@ module.exports = {
   pararPolling,
   setResponderCallback,
   setRetomarCallback,
+  setRasparCallback,
   setPreencherCallback,
   setEnviarPreenchidoCallback,
   setLimparCampoCallback,
@@ -848,6 +897,8 @@ module.exports = {
   _registrarContextoPregoeiro,
   _processarSlashResponder,
   _processarSlashRetomar,
+  _processarSlashRaspar,
+  _getRasparCallback,
   _parseItens,
   _processarCallbackQuery,
   _solicitarConfirmacao,
