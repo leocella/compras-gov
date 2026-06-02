@@ -706,6 +706,29 @@ app.post('/pregao/propostas', async (req, res) => {
 (async () => {
   await bootBrowser();
 
+  // Isolamento de abas (mesmo Chrome/login, cookies compartilhados):
+  //   `page`         = aba de COMANDOS (/raspar, /anexos, /retomar, endpoints)
+  //   `pageAgendador`= aba dedicada ao AGENDADOR (scraping diário + polling msgs)
+  // Assim o agendador roda sem disputar a aba com os comandos sob demanda.
+  let pageAgendador = page;
+  try {
+    const ctx = browser.contexts()[0];
+    const logadas = ctx.pages().filter(p => p.url().includes('/comprasnet-web/seguro/'));
+    if (logadas.length >= 1) page = logadas[0];      // comandos = 1ª aba logada
+    if (logadas.length >= 2) {
+      pageAgendador = logadas[1];                    // reusa 2ª aba logada (sem acumular)
+    } else {
+      pageAgendador = await ctx.newPage();           // cria a 2ª aba (compartilha login)
+      await pageAgendador.goto('https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/compras',
+        { waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(() => {});
+    }
+    console.log(`[boot] Aba comandos:  ${page.url().slice(0, 70)}`);
+    console.log(`[boot] Aba agendador: ${pageAgendador.url().slice(0, 70)}`);
+  } catch (e) {
+    console.log(`[boot] Setup de 2 abas falhou (${e.message}) — usando aba única para tudo.`);
+    pageAgendador = page;
+  }
+
   if (process.env.TELEGRAM_TOKEN) {
     try {
       telegram.init(process.env.TELEGRAM_TOKEN, process.env.TELEGRAM_CHAT_ID);
@@ -757,7 +780,7 @@ app.post('/pregao/propostas', async (req, res) => {
 
         // Encontra a aba LOGADA do SPA (mesma heurística do raspar-lote)
         const todasAbas = browser ? browser.contexts().flatMap(c => c.pages()) : [];
-        const pageLogada = todasAbas.find(p => p.url().includes('cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/'));
+        const pageLogada = page; // aba de comandos, isolada da aba do agendador
         if (!pageLogada) {
           return '⚠️ Nenhuma aba em <code>/seguro/fornecedor/</code> aberta no Chrome.\nFaça login + abra uma compra-alvo e mande /retomar de novo.';
         }
@@ -781,7 +804,7 @@ app.post('/pregao/propostas', async (req, res) => {
         }
 
         const todasAbas = browser ? browser.contexts().flatMap(c => c.pages()) : [];
-        const pageLogada = todasAbas.find(p => p.url().includes('cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/'));
+        const pageLogada = page; // aba de comandos, isolada da aba do agendador
         if (!pageLogada) {
           return '⚠️ Nenhuma aba em <code>/seguro/fornecedor/</code> aberta no Chrome.\nFaça login + abra uma compra e mande /raspar de novo.';
         }
@@ -806,7 +829,7 @@ app.post('/pregao/propostas', async (req, res) => {
         }
 
         const todasAbas = browser ? browser.contexts().flatMap(c => c.pages()) : [];
-        const pageLogada = todasAbas.find(p => p.url().includes('cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/'));
+        const pageLogada = page; // aba de comandos, isolada da aba do agendador
         if (!pageLogada) {
           return '⚠️ Nenhuma aba em <code>/seguro/fornecedor/</code> aberta no Chrome.\nFaça login + abra uma compra e mande /anexos de novo.';
         }
@@ -843,16 +866,16 @@ app.post('/pregao/propostas', async (req, res) => {
 
       agendador.init({
         telegram,
-        getPage:        () => page,
-        // Polling de mensagens usa a aba logada do CDP (pageSessao só existe no
-        // fluxo legado /sessao/iniciar; no boot por CDP usamos `page`).
-        getPageSessao:  () => pageSessao || page,
+        // Agendador roda na ABA DEDICADA (isolada dos comandos sob demanda).
+        getPage:        () => pageAgendador,
+        getPageSessao:  () => pageAgendador,
         comprasAlvoPath: path.join(__dirname, 'compras-alvo.json'),
         bus,
-        // Aba logada ocupada? (lote rodando, raspagem avulsa ou anexos em curso)
+        // Só coordena scraping x polling DENTRO da aba do agendador (lote rodando).
+        // Comandos (/raspar, /anexos) estão em outra aba → não suprimem o polling.
         isBusy: () => {
           const e = loteEstado.obterEstado();
-          return (!!e && e.status === loteEstado.STATUS.RODANDO) || _avulsaEmAndamento || _anexosEmAndamento;
+          return !!e && e.status === loteEstado.STATUS.RODANDO;
         },
       });
       const dryRun = process.env.TELEGRAM_RESPONDER_DRY_RUN === 'true';
