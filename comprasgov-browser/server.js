@@ -20,6 +20,7 @@ const telegram  = require('./telegram');
 const agendador = require('./agendador');
 const loteEstado  = require('./lote-estado');
 const { executarLote, rasparItensEspecificos } = require('./lote-runner');
+const { baixarAnexosItens } = require('./anexos-runner');
 
 const EventEmitter = require('events');
 const bus = new EventEmitter();
@@ -791,6 +792,31 @@ app.post('/pregao/propostas', async (req, res) => {
           .finally(() => { _avulsaEmAndamento = false; });
 
         return `🔍 <b>Raspando</b> itens ${itens.join(', ')} de <code>${compraId}</code>… resultado chega aqui.`;
+      });
+
+      // /anexos via Telegram → baixa e salva os anexos das propostas dos itens
+      let _anexosEmAndamento = false;
+      telegram.setAnexosCallback(async ({ compraId, itens }) => {
+        const estado = loteEstado.obterEstado();
+        if (estado && estado.status === loteEstado.STATUS.RODANDO) {
+          return '⏳ Lote rodando agora; aguarde concluir/pausar antes de baixar anexos.';
+        }
+        if (_anexosEmAndamento) {
+          return '⏳ Já há um download de anexos em andamento.';
+        }
+
+        const todasAbas = browser ? browser.contexts().flatMap(c => c.pages()) : [];
+        const pageLogada = todasAbas.find(p => p.url().includes('cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/'));
+        if (!pageLogada) {
+          return '⚠️ Nenhuma aba em <code>/seguro/fornecedor/</code> aberta no Chrome.\nFaça login + abra uma compra e mande /anexos de novo.';
+        }
+
+        _anexosEmAndamento = true;
+        baixarAnexosItens({ page: pageLogada, compraId, itens, telegram })
+          .catch(err => console.error('[anexos] erro:', err.message))
+          .finally(() => { _anexosEmAndamento = false; });
+
+        return `📎 <b>Baixando anexos</b> dos itens ${itens.join(', ')} de <code>${compraId}</code>… resumo chega aqui.`;
       });
       telegram.iniciarPolling();
 

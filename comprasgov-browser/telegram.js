@@ -67,6 +67,11 @@ let _onRaspar = null;
 function setRasparCallback(fn) { _onRaspar = fn; }
 function _getRasparCallback()  { return _onRaspar; }
 
+// Callback injetado pelo server.js para download de anexos (/anexos).
+// Recebe ({ compraId, itens }, chatId) e retorna string (mensagem para o user).
+let _onAnexos = null;
+function setAnexosCallback(fn) { _onAnexos = fn; }
+
 // Callbacks do novo fluxo de dupla confirmação
 let _onPreencher          = null;
 let _onEnviarPreenchido   = null;
@@ -843,6 +848,42 @@ async function _processarSlashRaspar(texto, chatId) {
   }
 }
 
+async function _processarSlashAnexos(texto, chatId) {
+  const m = texto.match(/^\/anexos\s+(\S+)\s+([\s\S]+)$/);
+  if (!m) {
+    await _post('sendMessage', {
+      chat_id: chatId,
+      text:    'Uso: /anexos <compraId> <itens>  (ex: /anexos 15838305900012026 3,5,7)',
+    });
+    return;
+  }
+  const compraId = m[1];
+  if (!/^\d{17}$/.test(compraId)) {
+    await _post('sendMessage', {
+      chat_id: chatId,
+      text:    `❌ compraId deve ter 17 dígitos. Recebi: ${compraId}`,
+    });
+    return;
+  }
+  let itens;
+  try {
+    itens = _parseItens(m[2]);
+  } catch (err) {
+    await _post('sendMessage', { chat_id: chatId, text: `❌ ${err.message}` });
+    return;
+  }
+  if (!_onAnexos) {
+    await _post('sendMessage', { chat_id: chatId, text: '❌ /anexos não configurado neste servidor' });
+    return;
+  }
+  try {
+    const resposta = await _onAnexos({ compraId, itens }, chatId);
+    await _post('sendMessage', { chat_id: chatId, text: resposta || '(sem resposta)', parse_mode: 'HTML' });
+  } catch (err) {
+    await _post('sendMessage', { chat_id: chatId, text: `❌ Erro ao baixar anexos: ${err.message}` });
+  }
+}
+
 async function iniciarPolling() {
   if (_polling) return;
   _polling = true;
@@ -886,6 +927,12 @@ async function iniciarPolling() {
               continue;
             }
 
+            // 2d) Slash command /anexos <compraId> <itens> — download de anexos
+            if (texto.startsWith('/anexos ') || texto === '/anexos') {
+              await _processarSlashAnexos(texto, chatId);
+              continue;
+            }
+
             // 3) Reply em mensagem do bot (notificação de pregoeiro)
             const replyId = msg.reply_to_message?.message_id;
             if (replyId && _pregoeiroContexto.has(replyId)) {
@@ -926,6 +973,7 @@ module.exports = {
   setResponderCallback,
   setRetomarCallback,
   setRasparCallback,
+  setAnexosCallback,
   setPreencherCallback,
   setEnviarPreenchidoCallback,
   setLimparCampoCallback,
@@ -948,6 +996,7 @@ module.exports = {
   _processarSlashResponder,
   _processarSlashRetomar,
   _processarSlashRaspar,
+  _processarSlashAnexos,
   _getRasparCallback,
   _parseItens,
   _processarCallbackQuery,

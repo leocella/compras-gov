@@ -534,6 +534,8 @@ async function rasparItensEspecificos({ page, compraId, itens, telegram = null }
 module.exports = {
   executarLote,
   rasparItensEspecificos,
+  navegarParaItemGoto,
+  recuperarCompra,
   _sessaoCaiu,
   // expostos para configuração eventual
   URL_ITEM_TEMPLATE,
