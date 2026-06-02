@@ -118,6 +118,22 @@ test('init aceita parâmetro bus sem lançar erro', () => {
   }));
 });
 
+test('jobMensagensPregoeiro pula quando isBusy()=true (não toca a aba nem notifica)', async () => {
+  const a = loadFresh();
+  let buscouAba = false;
+  let notificou = false;
+  a.init({
+    telegram: { enviar: () => {}, notificarMudancas: () => {}, notificarPregoeiro: () => { notificou = true; } },
+    getPage: () => null,
+    getPageSessao: () => { buscouAba = true; return {}; },
+    comprasAlvoPath: './compras-alvo.json',
+    isBusy: () => true,
+  });
+  await a.jobMensagensPregoeiro();
+  assert.equal(buscouAba, false, 'com a aba ocupada, nem deve buscar a página');
+  assert.equal(notificou, false, 'não deve notificar quando ocupado');
+});
+
 test('init sem bus não lança erro (bus opcional)', () => {
   const { init } = loadFresh();
   assert.doesNotThrow(() => init({

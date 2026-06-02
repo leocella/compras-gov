@@ -31,6 +31,7 @@ let _getPage;
 let _getPageSessao;
 let _comprasAlvoPath;
 let _bus = null;
+let _isBusy = null; // () => bool: aba logada ocupada (lote/raspar/anexos em andamento)
 
 // ─── Funções puras (exportadas para testes) ──────────────────────────────────
 
@@ -194,13 +195,22 @@ async function _compararENotificar(compraId, resultadosHoje, alvo) {
 // ─── Job 2: Polling mensagens do pregoeiro ───────────────────────────────────
 
 async function jobMensagensPregoeiro() {
+  // Não disputa a aba logada com lote/raspagem/anexos em andamento.
+  if (_isBusy && _isBusy()) {
+    log('[agendador] aba ocupada (lote/raspar/anexos) — polling de mensagens adiado.');
+    return;
+  }
+
   if (!SEL_MSG.urlChat) {
     log('[agendador] SEL_MSG não configurado — polling de mensagens pulado.');
     return;
   }
 
   const pageSessao = _getPageSessao();
-  if (!pageSessao) return;
+  if (!pageSessao) {
+    log('[agendador] sem página logada — polling de mensagens pulado.');
+    return;
+  }
 
   let alvos;
   try { alvos = carregarAlvos(); } catch { return; }
@@ -237,12 +247,13 @@ async function jobMensagensPregoeiro() {
 
 // ─── Inicialização ───────────────────────────────────────────────────────────
 
-function init({ telegram, getPage, getPageSessao, comprasAlvoPath, bus }) {
+function init({ telegram, getPage, getPageSessao, comprasAlvoPath, bus, isBusy }) {
   _telegram        = telegram;
   _getPage         = getPage;
   _getPageSessao   = getPageSessao;
   _comprasAlvoPath = comprasAlvoPath;
   _bus             = bus || null;
+  _isBusy          = isBusy || null;
 
   // Job 1: scraping diário
   cron.schedule(`0 ${HORA_SCRAPING} * * *`, jobScrapingDiario, {

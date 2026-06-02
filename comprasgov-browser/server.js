@@ -844,9 +844,16 @@ app.post('/pregao/propostas', async (req, res) => {
       agendador.init({
         telegram,
         getPage:        () => page,
-        getPageSessao:  () => pageSessao,
+        // Polling de mensagens usa a aba logada do CDP (pageSessao só existe no
+        // fluxo legado /sessao/iniciar; no boot por CDP usamos `page`).
+        getPageSessao:  () => pageSessao || page,
         comprasAlvoPath: path.join(__dirname, 'compras-alvo.json'),
         bus,
+        // Aba logada ocupada? (lote rodando, raspagem avulsa ou anexos em curso)
+        isBusy: () => {
+          const e = loteEstado.obterEstado();
+          return (!!e && e.status === loteEstado.STATUS.RODANDO) || _avulsaEmAndamento || _anexosEmAndamento;
+        },
       });
       const dryRun = process.env.TELEGRAM_RESPONDER_DRY_RUN === 'true';
       console.log(`[boot] Telegram + agendador inicializados. Responder pregoeiro: ${dryRun ? 'DRY-RUN (seguro)' : 'AUTO (envia direto)'}`);
