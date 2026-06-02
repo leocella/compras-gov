@@ -729,6 +729,12 @@ app.post('/pregao/propostas', async (req, res) => {
     pageAgendador = page;
   }
 
+  // Fluxo de resposta ao pregoeiro (/responder, dupla confirmação) usa a aba de
+  // comandos. O `pageSessao` legado só era setado no POST /sessao/iniciar — no
+  // boot por CDP ficava null, quebrando o /responder com "Sessão pageSessao não
+  // ativa". Apontamos pra `page` (aba de comandos) quando não há sessão legada.
+  if (!pageSessao) pageSessao = page;
+
   if (process.env.TELEGRAM_TOKEN) {
     try {
       telegram.init(process.env.TELEGRAM_TOKEN, process.env.TELEGRAM_CHAT_ID);
