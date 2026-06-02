@@ -42,8 +42,19 @@ function gerarChaveMensagem(msg) {
 
 function ehMensagemUrgente(texto, cnpjs) {
   if (!cnpjs || cnpjs.length === 0) return false;
-  const txt = String(texto).toUpperCase();
-  return cnpjs.some(cnpj => txt.includes(cnpj));
+  const txtDigits = String(texto).replace(/\D/g, ''); // normaliza p/ casar CNPJ formatado
+  return cnpjs.some(cnpj => cnpj && txtDigits.includes(cnpj));
+}
+
+// Decide se uma mensagem MERECE notificação. Mantém o que é do pregoeiro (e
+// afins) + tudo que cite o CNPJ do Rafael; dropa o ruído de outros fornecedores
+// ("Mensagem do Sistema"/"Mensagem do Participante" que não mencionam o Rafael).
+function _mensagemRelevante(msg, cnpjs) {
+  const txtDigits = String(msg.texto || '').replace(/\D/g, '');
+  if (cnpjs && cnpjs.some(c => c && txtDigits.includes(c))) return true; // cita o Rafael
+  const rem = String(msg.remetente || '').toLowerCase();
+  if (/sistema|participante/.test(rem)) return false;                    // ruído de concorrentes
+  return true;                                                           // pregoeiro e afins
 }
 
 function buildDetalhes(compraId, mudancas, dataAnterior, dataAtual) {
@@ -232,8 +243,10 @@ async function jobMensagensPregoeiro() {
         if (vistas.has(chave)) continue;
         vistas.add(chave);
 
-        // Só notifica se NÃO for a primeira rodada (assim pegamos apenas mensagens realmente NOVAS)
-        if (!isFirstRun) {
+        // Só notifica se NÃO for a primeira rodada (apenas mensagens NOVAS) E se
+        // for relevante (pregoeiro / cita o Rafael) — corta o ruído de Sistema/
+        // Participante sobre outros fornecedores.
+        if (!isFirstRun && _mensagemRelevante(msg, CNPJS_RAFAEL)) {
           const urgente = ehMensagemUrgente(msg.texto, CNPJS_RAFAEL);
           await _telegram.notificarPregoeiro(compraId, uasg, msg.item || '?', msg.texto, urgente);
           if (_bus) _bus.emit('mensagem_pregoeiro', { compraId, uasg, item: msg.item || '?', texto: msg.texto, urgente });
@@ -281,6 +294,7 @@ module.exports = {
   buildDetalhes,
   gerarChaveMensagem,
   ehMensagemUrgente,
+  _mensagemRelevante,
   // exposto para testes de integração
   jobScrapingDiario,
   jobMensagensPregoeiro,

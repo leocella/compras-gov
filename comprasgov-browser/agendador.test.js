@@ -103,6 +103,32 @@ test('ehMensagemUrgente retorna false quando lista vazia', () => {
   );
 });
 
+// ─── _mensagemRelevante (filtro de notificação) ──────────────────────────────
+
+test('_mensagemRelevante dropa "Mensagem do Sistema" sobre outro fornecedor', () => {
+  const { _mensagemRelevante } = loadFresh();
+  const msg = { remetente: 'Mensagem do Sistema', texto: 'Nenhum anexo enviado pelo fornecedor R K COMERCIO, CNPJ 53.021.139/0001-88' };
+  assert.strictEqual(_mensagemRelevante(msg, ['11189761000150']), false);
+});
+
+test('_mensagemRelevante dropa "Mensagem do Participante" de concorrente', () => {
+  const { _mensagemRelevante } = loadFresh();
+  const msg = { remetente: 'Mensagem do Participante', texto: 'De 33.275.120/0001-50 - Prezados, bom dia!' };
+  assert.strictEqual(_mensagemRelevante(msg, ['11189761000150']), false);
+});
+
+test('_mensagemRelevante mantém mensagem do Pregoeiro', () => {
+  const { _mensagemRelevante } = loadFresh();
+  const msg = { remetente: 'Mensagem do Pregoeiro', texto: 'Favor reduzir o valor do item 3' };
+  assert.strictEqual(_mensagemRelevante(msg, ['11189761000150']), true);
+});
+
+test('_mensagemRelevante mantém Sistema/Participante que cita o CNPJ do Rafael', () => {
+  const { _mensagemRelevante } = loadFresh();
+  const msg = { remetente: 'Mensagem do Sistema', texto: 'Convocação de anexo para 11.189.761/0001-50' };
+  assert.strictEqual(_mensagemRelevante(msg, ['11189761000150']), true);
+});
+
 // ─── bus de eventos ──────────────────────────────────────────────────────────
 
 test('init aceita parâmetro bus sem lançar erro', () => {
