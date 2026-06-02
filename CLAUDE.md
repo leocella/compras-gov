@@ -210,6 +210,39 @@ TELEGRAM_RESPONDER_DRY_RUN         ← legado (fluxo de dupla confirmação já 
 ### Deploy na VPS:
 Pull + restart manual em `/opt/comprasgov-browser` (sem systemd). Login manual no Chrome da VPS via VNC.
 
+### Setup no notebook Linux (máquina central do Rafael):
+O código é portável (usa `path.join`/`__dirname`, sem nada de Windows). Como o
+notebook tem tela, NÃO precisa de Xvfb/VNC — abre o Chrome normal na área de
+trabalho. Passos (scripts `.sh` já prontos na pasta, equivalentes aos `.bat`):
+
+```bash
+# 1. Node 20+ e dependências (NÃO precisa baixar browser do Playwright — conecta no Chrome real via CDP)
+cd comprasgov-browser && npm install
+
+# 2. Instalar Google Chrome (Debian/Ubuntu): baixe o .deb e: sudo apt install ./google-chrome-stable_current_amd64.deb
+
+# 3. Copiar/preencher .env (TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, HORA_SCRAPING, CNPJ_RAFAEL, API_KEY)
+#    e compras-alvo.json (as compras do lote).
+
+# 4. Tornar os scripts executáveis (uma vez)
+chmod +x iniciar-chrome.sh iniciar-servidor.sh raspar-lote.sh
+
+# 5. Abrir Chrome com CDP + LOGIN MANUAL no gov.br/ComprasGov
+./iniciar-chrome.sh        # abre Chrome :9222, perfil em ./chrome-debug-profile (login persiste)
+
+# 6a. Subir o bot+agendador (produção):
+./iniciar-servidor.sh      # = node server.js
+# 6b. OU rodar um lote manual agora:
+./raspar-lote.sh                 # lote completo (compras-alvo.json)
+./raspar-lote.sh --retomar       # retoma lote pausado (após relogar)
+./raspar-lote.sh --apenas <id>,<id>
+```
+
+Lote de ~30 compras é só botar os 30 no `compras-alvo.json` e rodar — processa
+sequencial, manda Excel por compra no Telegram, pula compras inacessíveis e
+**pausa salvando o progresso** se a sessão cair (reloga → `/retomar`). Pode levar
+horas (cada item ~15-20s por causa da expansão p/ marca/modelo).
+
 ---
 
 ## Separação de responsabilidades — resumo rápido
