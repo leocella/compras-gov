@@ -153,26 +153,37 @@ async function rasparItensPregao(page, uasg, numeroPregao, startUrl) {
 // Retorna mensagens com campo `item` extraído do link .mensagens-item.
 // ---------------------------------------------------------------------------
 async function lerMensagensChat(page, compraId) {
-  const targetUrl = SEL_MSG.urlChat + compraId;
+  // O envelope de mensagens da compra fica VISÍVEL na página do ITEM (na página
+  // da compra sem item ele fica oculto). O drawer lista mensagens de TODOS os
+  // itens da compra — então 1 abertura por compra basta.
+  const targetUrl = SEL_MSG.urlChatItem.replace('{item}', '1').replace('{compra}', String(compraId));
 
   if (!page.url().includes(compraId)) {
     await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
     await page.waitForTimeout(5000); // aguarda o SPA carregar
   }
 
-  if (page.url().includes('login')) {
-    throw new Error('Sessão expirada — faça login via POST /sessao/iniciar');
+  if (/\/login|acesso-nao-autorizado/i.test(page.url())) {
+    return { mensagens: [], url: page.url(), total: 0, nota: 'sessao-ou-acesso' };
   }
 
-  // Se o drawer não estiver aberto, clica no ícone de mensagens
-  const domHasCards = await page.$eval('body', el => el.innerHTML.includes('mensagem-card')).catch(() => false);
-  if (!domHasCards) {
-    const btnIcon = await page.$(SEL_MSG.botaoChatAbrir);
-    if (btnIcon) {
-      await btnIcon.click({ force: true });
-      await page.waitForTimeout(3000);
-    } else {
-      return { mensagens: [], url: page.url(), total: 0 };
+  // Abre o drawer clicando o envelope. Há instâncias duplicadas (mobile/desktop);
+  // clica a 1ª VISÍVEL e espera os cards. Resiliente: se nenhuma abrir (compra
+  // sem mensagens / botão oculto), retorna vazio em vez de quebrar o polling.
+  let temCards = await page.$('app-mensagens-da-compra .mensagem-card');
+  if (!temCards) {
+    const envs = page.locator('app-botao-mensagens-da-compra button:visible, button:visible:has(i.fa-envelope)');
+    const n = await envs.count();
+    for (let i = 0; i < n; i++) {
+      try {
+        await envs.nth(i).click({ timeout: 4000 });
+        await page.waitForTimeout(2500);
+      } catch (e) { continue; }
+      temCards = await page.$('app-mensagens-da-compra .mensagem-card');
+      if (temCards) break;
+    }
+    if (!temCards) {
+      return { mensagens: [], url: page.url(), total: 0, nota: 'sem-mensagens-ou-drawer-nao-abriu' };
     }
   }
 
