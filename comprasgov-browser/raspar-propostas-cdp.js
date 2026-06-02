@@ -79,6 +79,84 @@ async function navegarParaItemSPA(page, compraId, numItem) {
 }
 
 // ---------------------------------------------------------------------------
+// Parser puro de UM card de proposta (texto = sumário + detalhe expandido).
+// Pure JS (sem DOM) → testável com node --test.
+//
+// Card EXPANDIDO traz, no formato "Rótulo\nValor":
+//   Marca/Fabricante\nMOTOMIL · Modelo/Versão\nX · Valor ofertado (unitário | total)\nR$ ...
+// Card COLAPSADO lista os rótulos "Valor ofertado/negociado (unitário)" juntos
+// e só depois os valores → exige fallback posicional para o R$.
+// ---------------------------------------------------------------------------
+function parsearCardProposta(texto) {
+  const result = {
+    cnpj: '', porte: '', status: '', razaoSocial: '', uf: '',
+    valorOfertado: '', valorNegociado: '', marca: '', modelo: '', fabricante: '',
+  };
+  if (!texto) return result;
+
+  const linhas = texto.split('\n').map(l => l.trim()).filter(l => l);
+
+  const cnpjMatch = texto.match(/(\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2})/);
+  if (cnpjMatch) result.cnpj = cnpjMatch[1];
+
+  // Caminhada a partir do CNPJ: porte → status → razão social → UF
+  let idx = linhas.findIndex(l => /^\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}$/.test(l));
+  idx = idx === -1 ? 0 : idx + 1;
+
+  if (idx < linhas.length && /^(ME\/EPP|ME|EPP|DEMAIS|Demais)$/i.test(linhas[idx])) {
+    result.porte = linhas[idx]; idx++;
+  }
+
+  const statusKeywords = ['Inabilitada', 'Adjudicada', 'Aceita e habilitada', 'Aceita',
+    'Desclassificada', 'Recusada', 'Classificada', 'Cancelada', 'Habilitada'];
+  while (idx < linhas.length) {
+    const l = linhas[idx];
+    if (/equidade|programa de integridade/i.test(l)) { idx++; continue; }
+    const kw = statusKeywords.find(s => l.toLowerCase() === s.toLowerCase());
+    if (kw) { result.status = l; idx++; }
+    break;
+  }
+  while (idx < linhas.length && /equidade|programa de integridade/i.test(linhas[idx])) idx++;
+
+  if (idx < linhas.length && linhas[idx].length > 3 &&
+      !/^R\$/.test(linhas[idx]) && !/^Valor/.test(linhas[idx]) && !/^[A-Z]{2}$/.test(linhas[idx])) {
+    result.razaoSocial = linhas[idx]; idx++;
+  }
+  if (idx < linhas.length && /^[A-Z]{2}$/.test(linhas[idx])) {
+    result.uf = linhas[idx]; idx++;
+  }
+
+  // Valores — preferir rótulo no formato expandido "(unitário | total)" seguido
+  // imediatamente pelo valor. Exigir "| total" evita o falso-positivo do layout
+  // colapsado (onde os dois rótulos vêm antes dos valores).
+  const ofertadoMatch = texto.match(/Valor ofertado \(unit[áa]rio\s*\|\s*total\)\s*\n\s*(R\$\s*[\d.,]+)/i);
+  const negociadoMatch = texto.match(/Valor negociado \(unit[áa]rio\s*\|\s*total\)\s*\n\s*(R\$\s*[\d.,]+|-)/i);
+  const rsLines = linhas.filter(l => /^R\$\s*[\d.,]+$/.test(l));
+
+  if (ofertadoMatch) {
+    result.valorOfertado = ofertadoMatch[1].trim();
+  } else if (rsLines.length >= 1) {
+    result.valorOfertado = rsLines[0]; // fallback colapsado: 1º R$ = ofertado
+  }
+
+  if (negociadoMatch) {
+    const v = negociadoMatch[1].trim();
+    result.valorNegociado = v === '-' ? '' : v;
+  } else if (!ofertadoMatch && rsLines.length >= 2) {
+    result.valorNegociado = rsLines[1]; // fallback colapsado: 2º R$ = negociado
+  }
+
+  // Marca/Modelo — só existem no card EXPANDIDO, formato "Rótulo\nValor"
+  const marcaMatch = texto.match(/Marca\/Fabricante\s*\n\s*([^\n]+)/i);
+  const modeloMatch = texto.match(/Modelo\/Vers[ãa]o\s*\n\s*([^\n]+)/i);
+  if (marcaMatch) result.marca = marcaMatch[1].trim();
+  if (modeloMatch) result.modelo = modeloMatch[1].trim();
+  result.fabricante = result.marca; // campo combinado "Marca/Fabricante"
+
+  return result;
+}
+
+// ---------------------------------------------------------------------------
 // Extrair dados da página atual
 // ---------------------------------------------------------------------------
 async function extrairDadosPaginaAtual(page, numItem) {
@@ -182,7 +260,132 @@ async function extrairDadosPaginaAtual(page, numItem) {
     return result;
   }, numItem);
 
+  // Extração DETALHADA: expande cada card de proposta (marca/modelo só renderizam
+  // expandido) e re-parseia por card. Se falhar/vier vazio, mantém as propostas
+  // do parsing colapsado acima (sem regressão).
+  try {
+    const cardsTexto = await expandirECapturarPropostas(page);
+    if (cardsTexto && cardsTexto.length > 0) {
+      const detalhadas = cardsTexto
+        .map((t, i) => { const p = parsearCardProposta(t); p.posicao = String(i + 1); return p; })
+        .filter(p => p.cnpj);
+      if (detalhadas.length > 0) dados.propostas = detalhadas;
+    }
+  } catch (err) {
+    log(`  ⚠️ expansão de cards falhou (mantendo parsing colapsado): ${err.message}`);
+  }
+
   return dados;
+}
+
+// ---------------------------------------------------------------------------
+// Expande os cards de proposta e devolve o innerText de cada proposta
+// (sumário + detalhe revelado). Seletores canônicos do portal govbr-ds:
+//   proposta: app-botao-expandir-ocultar button[data-test="btn-expandir"]
+//             (aria-label "Mostrar proposta do item")
+//   item:     app-botao-expandir-item    button[data-test="btn-expandir"]
+//             (aria-label "Mostrar detalhes do item")
+// ---------------------------------------------------------------------------
+const SEL_BTN_PROPOSTA = 'app-botao-expandir-ocultar button[data-test="btn-expandir"], button[aria-label="Mostrar proposta do item"]';
+const SEL_BTN_ITEM     = 'app-botao-expandir-item button[data-test="btn-expandir"], button[aria-label="Mostrar detalhes do item"]';
+const SEL_ACOMPANHAR   = 'app-botao-icone[data-test="acompanhar-item"] button, button[aria-label="Acompanhar Item"]';
+
+async function expandirECapturarPropostas(page) {
+  // 1a) Clica "Acompanhar Item" — é o que revela "Todas as propostas" nesta etapa.
+  try {
+    const aco = page.locator(SEL_ACOMPANHAR);
+    const na = await aco.count();
+    for (let i = 0; i < na; i++) {
+      await aco.nth(i).scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
+      await aco.nth(i).click({ timeout: 5000 }).catch(() => {});
+      await sleep(800);
+    }
+  } catch (e) { /* sem botão acompanhar — segue */ }
+
+  // 1b) Abre os detalhes do item, caso a lista de propostas ainda esteja oculta.
+  try {
+    const det = page.locator(SEL_BTN_ITEM);
+    const nd = await det.count();
+    for (let i = 0; i < nd; i++) {
+      if ((await det.nth(i).getAttribute('aria-expanded')) === 'false') {
+        await det.nth(i).click({ timeout: 5000 }).catch(() => {});
+        await sleep(800);
+      }
+    }
+  } catch (e) { /* layout sem botão de detalhe — segue */ }
+
+  // 1c) Ativa a aba "Todas as propostas" — os cards dos concorrentes só
+  //     renderizam quando essa aba está ativa (a default é "Minha proposta").
+  try {
+    const clicou = await page.evaluate(() => {
+      const cands = Array.from(document.querySelectorAll('a, span, li, button, [role="tab"]'));
+      const tab = cands.find(el => (el.textContent || '').trim() === 'Todas as propostas');
+      if (!tab) return false;
+      const alvo = tab.closest('a, li, [role="tab"], button') || tab;
+      alvo.click();
+      return true;
+    });
+    if (clicou) await sleep(2500);
+  } catch (e) { /* sem aba — segue */ }
+
+  // 2) Expande cada card de proposta (clique real do Playwright — mais confiável
+  //    que .click() do DOM para componentes Angular).
+  const botoes = page.locator(SEL_BTN_PROPOSTA);
+  const total = await botoes.count();
+  for (let i = 0; i < total; i++) {
+    try {
+      if ((await botoes.nth(i).getAttribute('aria-expanded')) === 'false') {
+        await botoes.nth(i).scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
+        await botoes.nth(i).click({ timeout: 5000 }).catch(() => {});
+        await sleep(250);
+      }
+    } catch (e) { /* card problemático — ignora e segue */ }
+  }
+  if (total > 0) await sleep(1200); // render/animação final
+
+  // 2b) Ativa a sub-aba "Proposta" de cada card com clique REAL do Playwright.
+  //     É AQUI que Marca/Fabricante, Modelo/Versão, Valor proposta e Quantidade
+  //     ofertada são carregados — clique sintético via evaluate NÃO dispara o
+  //     handler do Angular (a default do card é a sub-aba "Chat").
+  try {
+    const propTabs = page.getByText('Proposta', { exact: true });
+    const np = await propTabs.count();
+    for (let i = 0; i < np; i++) {
+      try {
+        await propTabs.nth(i).scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {});
+        await propTabs.nth(i).click({ timeout: 3000 });
+        await sleep(150);
+      } catch (e) { /* aba problemática — segue */ }
+    }
+    if (np > 0) await sleep(1500);
+  } catch (e) { /* sem sub-aba Proposta — segue */ }
+
+  // 3) Para cada botão, sobe até o ancestral que contém UM único CNPJ (a "linha"
+  //    da proposta) e lê seu innerText — já com o detalhe revelado.
+  const cards = await page.evaluate((selBtn) => {
+    const reCnpj = /\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/g;
+    const botoes = Array.from(document.querySelectorAll(selBtn));
+    const vistos = new Set();
+    const out = [];
+    for (const b of botoes) {
+      let el = b;
+      let container = null;
+      for (let up = 0; up < 14 && el.parentElement; up++) {
+        el = el.parentElement;
+        const cnpjs = (el.innerText || '').match(reCnpj);
+        if (cnpjs && new Set(cnpjs).size === 1) { container = el; break; }
+      }
+      if (!container) continue;
+      const txt = container.innerText || '';
+      const cnpj = (txt.match(reCnpj) || [])[0];
+      if (!cnpj || vistos.has(cnpj)) continue;
+      vistos.add(cnpj);
+      out.push(txt);
+    }
+    return out;
+  }, SEL_BTN_PROPOSTA);
+
+  return cards;
 }
 
 // ---------------------------------------------------------------------------
@@ -492,7 +695,11 @@ async function main() {
   Flags:
     --recon            Analisa estrutura HTML da página atual
     --recon-detalhes   Expande 1 card e mostra seletores disponíveis
-    --expandir         Expande cada card para capturar marca/modelo (mais lento)
+    --capture          Expande os cards do item atual e mostra/salva o texto +
+                       o parse por proposta (marca/modelo) — para validar/ajustar
+
+  Obs: a extração normal JÁ expande cada card de proposta automaticamente para
+       capturar marca/modelo (o antigo --expandir não é mais necessário).
 
   ANTES de rodar:
     1. Abra o Chrome com CDP (use raspar-diario.bat)
@@ -558,6 +765,29 @@ async function main() {
       return;
     }
 
+    // --- CAPTURE: expande os cards e mostra o texto + parse por proposta ---
+    if (args.includes('--capture')) {
+      const itemCap = N || 1;
+      const urlCap = `https://cnetmobile.estaleiro.serpro.gov.br/comprasnet-web/seguro/fornecedor/acompanhamento-compra/item/${itemCap}?compra=${compraId}`;
+      log(`[CAPTURE] Navegando p/ item ${itemCap} da compra ${compraId} (rota logada)...`);
+      await page.goto(urlCap, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      await sleep(5000);
+      log(`[CAPTURE] URL: ${page.url()}`);
+      log('[CAPTURE] Expandindo cards de proposta e capturando texto por card...');
+      const cardsTexto = await expandirECapturarPropostas(page);
+      const parsed = cardsTexto.map(t => parsearCardProposta(t));
+      const comMarca = parsed.filter(p => p.marca).length;
+      console.log(`\n${cardsTexto.length} card(s) capturado(s) · ${comMarca} com marca preenchida\n`);
+      parsed.forEach((p, i) => {
+        console.log(`#${i + 1} ${p.cnpj} | ${p.razaoSocial} | ofertado=${p.valorOfertado} | marca="${p.marca}" | modelo="${p.modelo}"`);
+      });
+      ensureDir(DADOS_DIR);
+      const dump = path.join(DADOS_DIR, `capture_${compraId}.json`);
+      fs.writeFileSync(dump, JSON.stringify({ cardsTexto, parsed }, null, 2), 'utf8');
+      log(`Capture salvo em ${dump} (inclui o innerText cru de cada card p/ ajuste fino).`);
+      return;
+    }
+
     // --- RECON-DETALHES ---
     if (isReconDet) {
       const reconData = await reconDetalhes(page);
@@ -581,12 +811,6 @@ async function main() {
     // Item 1: já carregado (ou recém carregado)
     log('Extraindo item 1...');
     const item1 = await extrairDadosPaginaAtual(page, 1);
-    if (isExpandir) {
-      const det = await expandirCardsECapturarDetalhes(page, 1);
-      for (const p of item1.propostas) {
-        if (det[p.cnpj]) { p.marca = det[p.cnpj].marca; p.modelo = det[p.cnpj].modelo; p.fabricante = det[p.cnpj].fabricante; }
-      }
-    }
     resultados.push(item1);
     log(`  ✅ Item 1: ${item1.propostas.length} proposta(s)`);
     if (item1.propostas.length) log(`     1ª: ${item1.propostas[0].cnpj} | ${item1.propostas[0].razaoSocial} | ${item1.propostas[0].valorOfertado} | ${item1.propostas[0].status}`);
@@ -596,12 +820,6 @@ async function main() {
       try {
         await navegarParaItemSPA(page, compraId, i);
         const dados = await extrairDadosPaginaAtual(page, i);
-        if (isExpandir && dados.propostas.length > 0) {
-          const det = await expandirCardsECapturarDetalhes(page, i);
-          for (const p of dados.propostas) {
-            if (det[p.cnpj]) { p.marca = det[p.cnpj].marca; p.modelo = det[p.cnpj].modelo; p.fabricante = det[p.cnpj].fabricante; }
-          }
-        }
         resultados.push(dados);
         log(`  ✅ Item ${i}: ${dados.propostas.length} proposta(s)`);
         if (dados.propostas.length) log(`     1ª: ${dados.propostas[0].cnpj} | ${dados.propostas[0].razaoSocial} | ${dados.propostas[0].valorOfertado}`);
@@ -632,6 +850,8 @@ if (require.main === module) {
 module.exports = {
   conectarChrome,
   navegarParaItemSPA,
+  parsearCardProposta,
+  expandirECapturarPropostas,
   extrairDadosPaginaAtual,
   expandirCardsECapturarDetalhes,
   reconDetalhes,

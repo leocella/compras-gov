@@ -82,8 +82,12 @@ function _getLimparCampoCallback()         { return _onLimparCampo; }
 let _enviarFn = null;
 let _postFn   = null;
 let _postPhotoFn = null;
+let _postMultipartFn = null;
+let _docRetryDelayMs = 1500; // espera entre tentativas de sendDocument
 function _setPostFn(fn) { _postFn = fn; }
 function _setPostPhotoFn(fn) { _postPhotoFn = fn; }
+function _setPostMultipartFn(fn) { _postMultipartFn = fn; }
+function _setDocRetryDelay(ms) { _docRetryDelayMs = ms; }
 
 function init(token, chatId) {
   if (!token)  throw new Error('[telegram] TELEGRAM_TOKEN não definido no .env');
@@ -106,19 +110,21 @@ function _registrarContextoPregoeiro(messageId, ctx) {
   _pregoeiroContexto.set(messageId, ctx);
 }
 
-function _post(metodo, payload) {
-  if (_postFn) return _postFn(metodo, payload);
+// Timeouts de rede (ms). O GET do getUpdates faz long-poll de 25s
+// (?timeout=25), então o timeout do socket precisa ser MAIOR que isso —
+// senão mata long-polls saudáveis. Um socket realmente morto é abortado
+// após GET_TIMEOUT_MS; o erro sobe pro loop de polling (catch → retry 5s)
+// e o bot volta a responder. Sem isso, o await ficava pendurado pra sempre
+// num socket morto e o poller congelava silenciosamente.
+const GET_TIMEOUT_MS  = 35_000;
+const POST_TIMEOUT_MS = 20_000;
+
+// Requisição HTTP(S) com timeout de socket. `transport` permite injetar
+// require('http') nos testes; em produção usa https.
+function _httpRequest({ hostname, port, path: reqPath, method = 'GET', headers = {}, body = null, timeoutMs = GET_TIMEOUT_MS, transport } = {}) {
+  const mod = transport || https;
   return new Promise((resolve, reject) => {
-    const body = JSON.stringify(payload);
-    const req  = https.request({
-      hostname: 'api.telegram.org',
-      path:     `/bot${_token}/${metodo}`,
-      method:   'POST',
-      headers: {
-        'Content-Type':   'application/json',
-        'Content-Length': Buffer.byteLength(body),
-      },
-    }, (res) => {
+    const req = mod.request({ hostname, port, path: reqPath, method, headers }, (res) => {
       let raw = '';
       res.on('data', c => { raw += c; });
       res.on('end', () => {
@@ -127,25 +133,36 @@ function _post(metodo, payload) {
       });
     });
     req.on('error', reject);
-    req.write(body);
+    req.setTimeout(timeoutMs, () => {
+      req.destroy(new Error(`[telegram] HTTP timeout após ${timeoutMs}ms (${method} ${reqPath})`));
+    });
+    if (body) req.write(body);
     req.end();
   });
 }
 
+function _post(metodo, payload) {
+  if (_postFn) return _postFn(metodo, payload);
+  const body = JSON.stringify(payload);
+  return _httpRequest({
+    hostname: 'api.telegram.org',
+    path:     `/bot${_token}/${metodo}`,
+    method:   'POST',
+    headers: {
+      'Content-Type':   'application/json',
+      'Content-Length': Buffer.byteLength(body),
+    },
+    body,
+    timeoutMs: POST_TIMEOUT_MS,
+  });
+}
+
 function _get(metodo, query = '') {
-  return new Promise((resolve, reject) => {
-    const req = https.get(
-      `https://api.telegram.org/bot${_token}/${metodo}${query}`,
-      (res) => {
-        let raw = '';
-        res.on('data', c => { raw += c; });
-        res.on('end', () => {
-          try { resolve(JSON.parse(raw)); }
-          catch { resolve({ ok: false, raw }); }
-        });
-      }
-    );
-    req.on('error', reject);
+  return _httpRequest({
+    hostname:  'api.telegram.org',
+    path:      `/bot${_token}/${metodo}${query}`,
+    method:    'GET',
+    timeoutMs: GET_TIMEOUT_MS,
   });
 }
 
@@ -180,6 +197,7 @@ function _gerarChave() {
 
 // ─── Upload de documento (sendDocument, multipart/form-data) ────────────────
 function _postMultipart(metodo, chatId, filePath, caption) {
+  if (_postMultipartFn) return _postMultipartFn(metodo, chatId, filePath, caption);
   return new Promise((resolve, reject) => {
     const fileBuf  = fs.readFileSync(filePath);
     const fileName = path.basename(filePath);
@@ -282,15 +300,44 @@ function _postPhoto(chatId, buffer, caption) {
   });
 }
 
+// Falha transitória do Telegram (vale re-tentar): erro de rede (sem error_code),
+// 5xx (ex.: 504 Gateway Timeout) ou 429 (rate limit). 4xx é definitivo.
+function _docFalhaTransitoria(r) {
+  if (!r) return true;             // rejeição/erro de rede
+  if (r.ok) return false;
+  const code = r.error_code;
+  return code == null || code >= 500 || code === 429;
+}
+
+const _DOC_MAX_TENTATIVAS = 3;
+
+async function _enviarDocComRetry(id, filePath, caption) {
+  let ultimo = null;
+  for (let tent = 1; tent <= _DOC_MAX_TENTATIVAS; tent++) {
+    try {
+      const r = await _postMultipart('sendDocument', id, filePath, caption);
+      if (r && r.ok) return r;
+      ultimo = r;
+      if (!_docFalhaTransitoria(r) || tent === _DOC_MAX_TENTATIVAS) return r;
+    } catch (err) {
+      ultimo = { ok: false, error_code: null, description: err.message };
+      if (tent === _DOC_MAX_TENTATIVAS) return ultimo;
+    }
+    console.error(`[telegram] sendDocument ${id} falhou (tent ${tent}/${_DOC_MAX_TENTATIVAS}) — re-tentando`);
+    if (_docRetryDelayMs > 0) await new Promise(res => setTimeout(res, _docRetryDelayMs));
+  }
+  return ultimo;
+}
+
 async function enviarDocumento(filePath, caption) {
   if (!_token) throw new Error('[telegram] Não inicializado — chame init() primeiro');
   if (!fs.existsSync(filePath)) throw new Error(`Arquivo não encontrado: ${filePath}`);
 
   let primeiroMessageId = null;
   for (const id of _chatId) {
-    const r = await _postMultipart('sendDocument', id, filePath, caption);
-    if (!r.ok) {
-      console.error(`[telegram] Falha sendDocument para ${id}:`, JSON.stringify(r).slice(0, 200));
+    const r = await _enviarDocComRetry(id, filePath, caption);
+    if (!r || !r.ok) {
+      console.error(`[telegram] Falha sendDocument para ${id} (após ${_DOC_MAX_TENTATIVAS} tentativas):`, JSON.stringify(r).slice(0, 200));
     } else if (primeiroMessageId === null) {
       primeiroMessageId = r.result?.message_id ?? null;
     }
@@ -888,6 +935,9 @@ module.exports = {
   _getLimparCampoCallback,
   _setPostFn,
   _setPostPhotoFn,
+  _setPostMultipartFn,
+  _setDocRetryDelay,
+  _httpRequest,
   _solicitarPreenchimento,
   _processarPreencher,
   _processarEnviar,

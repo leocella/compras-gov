@@ -98,6 +98,30 @@ async function navegarParaItemGoto(page, compraId, numItem) {
 }
 
 /**
+ * Distingue PERDA REAL de sessão (exige re-login humano → pausar o lote) de
+ * "a compra só não abriu" (bounce pra /compras, compra-nao-encontrada → pular a
+ * compra e seguir). Recebe o resultado de verificarSessao já avaliado.
+ */
+function _sessaoCaiu(page, ses) {
+  const url = page.url();
+  // Redirect explícito pra SSO/login/intro/sessão-expirada → sessão caiu.
+  if (/sso\.acesso\.gov\.br|acesso\.gov\.br\/login|contas\.acesso\.gov\.br|\/login|\/loginPortal|\/intro\.htm|\/sessao-expirada/i.test(url)) {
+    return true;
+  }
+  // Motivos do verificarSessao que pedem humano (SSO/CAPTCHA/URL de login).
+  if (ses && /SSO|CAPTCHA|URL inv[aá]lida|Fora do ComprasGov/i.test(ses.motivo || '')) {
+    return true;
+  }
+  // compra-nao-encontrada / acesso-nao-autorizado (ex.: navegou pra item além do
+  // último acessível — fim natural da compra) ou ainda dentro da área logada
+  // (/seguro/) = problema da compra, NÃO da sessão.
+  if (/compra-nao-encontrada|acesso-nao-autorizado/i.test(url)) return false;
+  if (/comprasnet-web\/seguro\//i.test(url)) return false;
+  // Fora da área logada e inválida → conservador: trata como sessão caída.
+  return !ses || !ses.valida;
+}
+
+/**
  * Executa o lote.
  *
  * @param {object}        opts
@@ -140,6 +164,18 @@ async function executarLote(opts) {
   let vaziasSeguidas    = 0;
   const LIMITE_VAZIAS_SEGUIDAS = 2; // CAPTCHA mid-lote → 2 compras vazias seguidas = pausa
 
+  // Pausa o lote (sessão caiu de verdade): persiste estado + notifica + retorna.
+  const _pausarLote = async (motivo) => {
+    log(`[lote-runner] sessão inválida: ${motivo} — pausando lote`);
+    loteEstado.marcarPausa(motivo);
+    const estado = loteEstado.obterEstado();
+    if (telegram) {
+      try { await telegram.notificarSessaoExpirada(motivo, estado.compras_pendentes); }
+      catch (e) { log(`[lote-runner] falha ao notificar pausa: ${e.message}`); }
+    }
+    return { pausado: true, motivo, estado };
+  };
+
   for (let i = 0; i < alvos.length; i++) {
     const alvo     = alvos[i];
     const compraId = alvo.compraId;
@@ -151,35 +187,32 @@ async function executarLote(opts) {
         await page.goto(_urlItem(compraId, 1), { waitUntil: 'domcontentloaded', timeout: 30_000 });
         await sleep(ESPERA_POS_GOTO);
       }
-      // Recovery: se já caiu em compra-nao-encontrada no goto inicial, tenta consertar
-      if (page.url().includes('compra-nao-encontrada')) {
-        log(`[lote-runner] goto inicial caiu em compra-nao-encontrada — tentando recovery`);
-        const rec = await recuperarCompra(page, compraId);
-        if (!rec.ok) {
-          log(`[lote-runner] recovery inicial falhou — marcando falha e seguindo`);
-          loteEstado.marcarFalha(compraId, `compra-nao-encontrada (recovery falhou)`);
-          if (i < alvos.length - 1) await sleep(DELAY_COMPRA);
-          continue;
-        }
-        log(`[lote-runner] recovery inicial OK — começando o loop`);
-      }
     } catch (err) {
       log(`[lote-runner] erro no goto de ${compraId}: ${err.message}`);
       loteEstado.marcarFalha(compraId, `goto falhou: ${err.message}`);
+      if (i < alvos.length - 1) await sleep(DELAY_COMPRA);
       continue;
     }
 
-    // 2) Verifica sessão (após goto, com SPA carregado)
-    const ses = await verificarSessao(page);
+    // 2) Verifica sessão. Só pausa o lote quando a sessão CAIU DE VERDADE
+    //    (SSO/login/CAPTCHA). Se a compra apenas não abriu (bounce pra /compras
+    //    ou compra-nao-encontrada — em geral transitório), tenta recovery e, se
+    //    ainda não abrir, PULA a compra sem derrubar o lote.
+    let ses = await verificarSessao(page);
     if (!ses.valida) {
-      log(`[lote-runner] sessão inválida: ${ses.motivo} — pausando lote`);
-      loteEstado.marcarPausa(ses.motivo);
-      const estado = loteEstado.obterEstado();
-      if (telegram) {
-        try { await telegram.notificarSessaoExpirada(ses.motivo, estado.compras_pendentes); }
-        catch (e) { log(`[lote-runner] falha ao notificar pausa: ${e.message}`); }
+      if (_sessaoCaiu(page, ses)) return await _pausarLote(ses.motivo);
+
+      log(`[lote-runner] compra ${compraId} não abriu (${ses.motivo}) — tentando recovery`);
+      await recuperarCompra(page, compraId);
+      ses = await verificarSessao(page);
+      if (!ses.valida) {
+        if (_sessaoCaiu(page, ses)) return await _pausarLote(ses.motivo);
+        log(`[lote-runner] compra ${compraId} inacessível após recovery (${ses.motivo}) — pulando`);
+        loteEstado.marcarFalha(compraId, `inacessível: ${ses.motivo}`);
+        if (i < alvos.length - 1) await sleep(DELAY_COMPRA);
+        continue;
       }
-      return { pausado: true, motivo: ses.motivo, estado };
+      log(`[lote-runner] recovery OK — compra ${compraId} abriu`);
     }
 
     // 3) Loop de itens via pushState (mecânica existente, não muda)
@@ -272,7 +305,7 @@ async function executarLote(opts) {
     // Fim_natural sempre confia.
     if (motivoBreak === 'cabecalho_mismatch' || motivoBreak === 'lixo') {
       const sesPos = await verificarSessao(page);
-      if (!sesPos.valida) {
+      if (!sesPos.valida && _sessaoCaiu(page, sesPos)) {
         // Sessão caiu de verdade. Se temos parciais, SALVA como falha (pra não perder o trabalho)
         // antes de pausar o lote inteiro.
         if (resultados.length > 0) {
@@ -312,7 +345,7 @@ async function executarLote(opts) {
     if (resultados.length === 0) {
       // Item 1 voltou vazio: re-checa sessão (pode ter caído entre verificarSessao e extrair)
       const sesPos = await verificarSessao(page);
-      if (!sesPos.valida) {
+      if (!sesPos.valida && _sessaoCaiu(page, sesPos)) {
         log(`[lote-runner] item 1 vazio + sessão inválida (${sesPos.motivo}) — pausando agora`);
         loteEstado.marcarPausa(`item vazio + ${sesPos.motivo}`);
         const estado = loteEstado.obterEstado();
@@ -413,6 +446,17 @@ async function rasparItensEspecificos({ page, compraId, itens, telegram = null }
     throw new Error('lote-runner: itens deve ser array não vazio');
   }
 
+  // Navega pra compra ANTES de verificar a sessão: verificarSessao exige o
+  // componente Angular da compra no DOM, que só existe depois do goto. Rodar a
+  // verificação na aba genérica (/compras, sem compra aberta) dava falso
+  // "sessão expirada". Mesmo padrão do executarLote (goto → verificarSessao).
+  try {
+    await page.goto(_urlItem(compraId, itens[0]), { waitUntil: 'domcontentloaded', timeout: 30_000 });
+    await sleep(ESPERA_POS_GOTO);
+  } catch (err) {
+    log(`[raspar-avulso] erro no goto inicial de ${compraId}: ${err.message}`);
+  }
+
   const ses = await verificarSessao(page);
   if (!ses.valida) {
     log(`[raspar-avulso] sessão inválida: ${ses.motivo}`);
@@ -490,6 +534,7 @@ async function rasparItensEspecificos({ page, compraId, itens, telegram = null }
 module.exports = {
   executarLote,
   rasparItensEspecificos,
+  _sessaoCaiu,
   // expostos para configuração eventual
   URL_ITEM_TEMPLATE,
   DELAY_ITEM,

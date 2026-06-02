@@ -24,6 +24,35 @@ test('init não lança se token e chatId presentes', () => {
   assert.doesNotThrow(() => t.init('tok:abc', '999'));
 });
 
+test('enviarDocumento re-tenta em 504 (Gateway Timeout) e depois sucede', async () => {
+  const t = loadFresh();
+  t.init('tok:abc', '999');
+  t._setDocRetryDelay(0); // sem espera entre tentativas no teste
+  let n = 0;
+  t._setPostMultipartFn(async () => {
+    n++;
+    if (n < 3) return { ok: false, error_code: 504, description: 'Gateway Timeout' };
+    return { ok: true, result: { message_id: 42 } };
+  });
+  const msgId = await t.enviarDocumento(require.resolve('./telegram'), 'legenda');
+  assert.equal(n, 3, 'esperava 3 tentativas (2 falhas 504 + 1 sucesso)');
+  assert.equal(msgId, 42);
+});
+
+test('enviarDocumento NÃO re-tenta em erro definitivo (400) — só 1 tentativa', async () => {
+  const t = loadFresh();
+  t.init('tok:abc', '999');
+  t._setDocRetryDelay(0);
+  let n = 0;
+  t._setPostMultipartFn(async () => {
+    n++;
+    return { ok: false, error_code: 400, description: 'Bad Request' };
+  });
+  const msgId = await t.enviarDocumento(require.resolve('./telegram'), 'legenda');
+  assert.equal(n, 1, '400 é definitivo — não deve re-tentar');
+  assert.equal(msgId, null);
+});
+
 test('notificarMudancas gera chave de 4 chars e armazena detalhes', async () => {
   const t = loadFresh();
   t.init('tok:abc', '999');
@@ -339,4 +368,48 @@ test('_processarSlashRaspar responde uso quando faltam args', async () => {
   await t._processarSlashRaspar('/raspar', 999);
 
   assert.match(posts[0].text, /Uso: \/raspar/);
+});
+
+test('_httpRequest rejeita quando o servidor não responde (timeout)', async () => {
+  const http = require('node:http');
+  const t = loadFresh();
+
+  // Servidor que aceita a conexão mas NUNCA responde — simula o socket morto
+  // que travava o long-poll do getUpdates (bug do poller congelado).
+  const server = http.createServer(() => { /* segura o socket, sem responder */ });
+  await new Promise(res => server.listen(0, '127.0.0.1', res));
+  const { port } = server.address();
+
+  try {
+    await assert.rejects(
+      t._httpRequest({
+        hostname: '127.0.0.1', port, path: '/', method: 'GET',
+        timeoutMs: 250, transport: http,
+      }),
+      /timeout/i,
+    );
+  } finally {
+    server.close();
+  }
+});
+
+test('_httpRequest resolve JSON quando o servidor responde', async () => {
+  const http = require('node:http');
+  const t = loadFresh();
+
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, result: 42 }));
+  });
+  await new Promise(res => server.listen(0, '127.0.0.1', res));
+  const { port } = server.address();
+
+  try {
+    const r = await t._httpRequest({
+      hostname: '127.0.0.1', port, path: '/', method: 'GET', transport: http,
+    });
+    assert.deepEqual(r, { ok: true, result: 42 });
+  } finally {
+    server.close();
+  }
 });
