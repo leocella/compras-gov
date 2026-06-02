@@ -112,6 +112,22 @@ test('_sessaoCaiu: redirect pro SSO/login É sessão caída', () => {
   assert.equal(lote._sessaoCaiu(fakeUrl('https://sso.acesso.gov.br/login'), { valida: false, motivo: 'Redirecionado pro gov.br SSO (sessão expirou)' }), true);
 });
 
+test('executarLote PAUSA em queda de internet (resumível, não marca tudo falha)', async () => {
+  const { lote, estado } = loadFreshComEstado();
+  const page = {
+    url: () => GENERICA,
+    goto: async () => { throw new Error('page.goto: net::ERR_INTERNET_DISCONNECTED at https://cnetmobile...'); },
+    reload: async () => {},
+    evaluate: async () => ({}),
+  };
+  const r = await lote.executarLote({
+    alvos: [{ compraId: '11111111111111111' }, { compraId: '22222222222222222' }],
+    page, telegram: null, iniciarNovo: true,
+  });
+  assert.equal(r.pausado, true, 'queda de rede deve PAUSAR (não falhar tudo e seguir)');
+  assert.ok(estado.falhas.length < 2, 'não deve marcar as compras como falha numa queda de rede');
+});
+
 test('executarLote PULA compra que quica pra /compras (não pausa o lote)', async () => {
   const { lote, estado } = loadFreshComEstado();
   const page = fakePageRedirect(GENERICA, { comprasBounceIds: ['16004605900202025'] });

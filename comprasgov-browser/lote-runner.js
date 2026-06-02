@@ -122,6 +122,17 @@ function _sessaoCaiu(page, ses) {
 }
 
 /**
+ * Erro de REDE/conectividade (internet caiu, DNS, conexão recusada). Diferente
+ * de sessão expirada — aqui nem o portal carrega. Deve PAUSAR o lote (resumível
+ * via /retomar) em vez de marcar a compra como falha e seguir queimando as
+ * próximas. Cobre os net::ERR_* do Chromium e os erros de DNS/socket do Node.
+ */
+function _ehErroDeRede(err) {
+  const m = (err && err.message) || '';
+  return /ERR_INTERNET_DISCONNECTED|ERR_NAME_NOT_RESOLVED|ERR_NETWORK_CHANGED|ERR_CONNECTION|ERR_PROXY|ERR_ADDRESS_UNREACHABLE|net::ERR|ENOTFOUND|ECONNREFUSED|ECONNRESET|EAI_AGAIN|getaddrinfo/i.test(m);
+}
+
+/**
  * Executa o lote.
  *
  * @param {object}        opts
@@ -188,6 +199,10 @@ async function executarLote(opts) {
         await sleep(ESPERA_POS_GOTO);
       }
     } catch (err) {
+      if (_ehErroDeRede(err)) {
+        log(`[lote-runner] queda de rede no goto de ${compraId} (${err.message.slice(0, 60)}) — pausando p/ retomar`);
+        return await _pausarLote(`queda de rede: ${err.message.slice(0, 80)}`);
+      }
       log(`[lote-runner] erro no goto de ${compraId}: ${err.message}`);
       loteEstado.marcarFalha(compraId, `goto falhou: ${err.message}`);
       if (i < alvos.length - 1) await sleep(DELAY_COMPRA);
@@ -294,6 +309,15 @@ async function executarLote(opts) {
         await sleep(DELAY_ITEM);
       }
     } catch (err) {
+      if (_ehErroDeRede(err)) {
+        // Salva o que já raspou desta compra antes de pausar (não perde trabalho).
+        if (resultados.length > 0) {
+          try { salvarSnapshot(resultados, compraId); await gerarExcel(resultados, compraId); }
+          catch (e) { log(`[lote-runner] falha ao salvar parciais: ${e.message}`); }
+        }
+        log(`[lote-runner] queda de rede no item ${itemAtual} de ${compraId} — pausando p/ retomar`);
+        return await _pausarLote(`queda de rede durante ${compraId}: ${err.message.slice(0, 60)}`);
+      }
       log(`[lote-runner] erro raspando item ${itemAtual} de ${compraId}: ${err.message}`);
       loteEstado.marcarFalha(compraId, `item ${itemAtual}: ${err.message}`);
       if (i < alvos.length - 1) await sleep(DELAY_COMPRA);
