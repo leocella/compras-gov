@@ -67,6 +67,16 @@ async function bootBrowser() {
   }
 }
 
+// Resolve uma aba logada (/seguro/) ainda ABERTA, re-resolvida na hora — evita
+// usar referência de aba que foi fechada (causa do "Target page has been
+// closed" quando o usuário fecha a aba que o servidor guardou no boot).
+function _paginaLogada() {
+  const todas = browser ? browser.contexts().flatMap(c => c.pages()).filter(p => !p.isClosed()) : [];
+  return todas.find(p => p.url().includes('/comprasnet-web/seguro/'))
+      || todas.find(p => p.url().includes('/comprasnet-web'))
+      || todas[0] || null;
+}
+
 async function shutdown(signal) {
   console.log(`\n[shutdown] Recebido ${signal}, fechando browser...`);
   try { if (browser) await browser.close(); } catch (e) { /* ignore */ }
@@ -740,16 +750,18 @@ app.post('/pregao/propostas', async (req, res) => {
       telegram.init(process.env.TELEGRAM_TOKEN, process.env.TELEGRAM_CHAT_ID);
       // Novo fluxo de dupla confirmação: preencher → screenshot → enviar
       telegram.setPreencherCallback(async (ctx, texto) => {
-        if (!pageSessao) throw new Error('Sessão pageSessao não ativa');
+        const ps = (pageSessao && !pageSessao.isClosed()) ? pageSessao : _paginaLogada();
+        if (!ps) throw new Error('Sem aba logada no Chrome — faça login na rota /seguro/fornecedor/');
         if (!ctx.item || ctx.item === '?') throw new Error('Item ausente — uso: /responder <compraId> <item> <texto>');
-        const r   = await preencherSemEnviar(pageSessao, ctx.compraId, ctx.item, texto);
-        const buf = await capturarScreenshotChat(pageSessao);
+        const r   = await preencherSemEnviar(ps, ctx.compraId, ctx.item, texto);
+        const buf = await capturarScreenshotChat(ps);
         return { lastMessageSig: r.lastMessageSig, screenshotBuffer: buf, preenchidoEm: r.preenchidoEm };
       });
 
       telegram.setEnviarPreenchidoCallback(async (ctx, sigOriginal) => {
-        if (!pageSessao) throw new Error('Sessão pageSessao não ativa');
-        const sigAtual = await obterUltimaAssinaturaMsg(pageSessao, ctx.compraId, ctx.item);
+        const ps = (pageSessao && !pageSessao.isClosed()) ? pageSessao : _paginaLogada();
+        if (!ps) throw new Error('Sem aba logada no Chrome — faça login');
+        const sigAtual = await obterUltimaAssinaturaMsg(ps, ctx.compraId, ctx.item);
         const houveNovaMsg = !!(sigAtual && sigOriginal && sigAtual !== sigOriginal);
         if (houveNovaMsg) {
           const cg = require('./comprasgov');
@@ -757,13 +769,14 @@ app.post('/pregao/propostas', async (req, res) => {
             cg._logRespostaRaceDetected({ compraId: ctx.compraId, item: ctx.item, sigOrig: sigOriginal, sigNovo: sigAtual });
           }
         }
-        const r = await enviarPreenchido(pageSessao, ctx.compraId, ctx.item);
+        const r = await enviarPreenchido(ps, ctx.compraId, ctx.item);
         return { enviadoEm: r.enviadoEm, houveNovaMsg };
       });
 
       telegram.setLimparCampoCallback(async (ctx, motivo) => {
-        if (!pageSessao) return { limpoEm: new Date().toISOString(), notado: 'sem-sessao' };
-        return limparCampo(pageSessao, ctx.compraId, ctx.item, motivo);
+        const ps = (pageSessao && !pageSessao.isClosed()) ? pageSessao : _paginaLogada();
+        if (!ps) return { limpoEm: new Date().toISOString(), notado: 'sem-sessao' };
+        return limparCampo(ps, ctx.compraId, ctx.item, motivo);
       });
 
       // /retomar via Telegram → retoma lote pausado usando aba logada do Chrome
@@ -786,7 +799,7 @@ app.post('/pregao/propostas', async (req, res) => {
 
         // Encontra a aba LOGADA do SPA (mesma heurística do raspar-lote)
         const todasAbas = browser ? browser.contexts().flatMap(c => c.pages()) : [];
-        const pageLogada = page; // aba de comandos, isolada da aba do agendador
+        const pageLogada = (page && !page.isClosed()) ? page : _paginaLogada(); // aba de comandos (válida)
         if (!pageLogada) {
           return '⚠️ Nenhuma aba em <code>/seguro/fornecedor/</code> aberta no Chrome.\nFaça login + abra uma compra-alvo e mande /retomar de novo.';
         }
@@ -810,7 +823,7 @@ app.post('/pregao/propostas', async (req, res) => {
         }
 
         const todasAbas = browser ? browser.contexts().flatMap(c => c.pages()) : [];
-        const pageLogada = page; // aba de comandos, isolada da aba do agendador
+        const pageLogada = (page && !page.isClosed()) ? page : _paginaLogada(); // aba de comandos (válida)
         if (!pageLogada) {
           return '⚠️ Nenhuma aba em <code>/seguro/fornecedor/</code> aberta no Chrome.\nFaça login + abra uma compra e mande /raspar de novo.';
         }
@@ -835,7 +848,7 @@ app.post('/pregao/propostas', async (req, res) => {
         }
 
         const todasAbas = browser ? browser.contexts().flatMap(c => c.pages()) : [];
-        const pageLogada = page; // aba de comandos, isolada da aba do agendador
+        const pageLogada = (page && !page.isClosed()) ? page : _paginaLogada(); // aba de comandos (válida)
         if (!pageLogada) {
           return '⚠️ Nenhuma aba em <code>/seguro/fornecedor/</code> aberta no Chrome.\nFaça login + abra uma compra e mande /anexos de novo.';
         }
@@ -872,9 +885,10 @@ app.post('/pregao/propostas', async (req, res) => {
 
       agendador.init({
         telegram,
-        // Agendador roda na ABA DEDICADA (isolada dos comandos sob demanda).
-        getPage:        () => pageAgendador,
-        getPageSessao:  () => pageAgendador,
+        // Agendador roda na ABA DEDICADA se ela estiver viva; se foi fechada,
+        // re-resolve uma aba logada válida (robusto a aba fechada).
+        getPage:        () => (pageAgendador && !pageAgendador.isClosed()) ? pageAgendador : _paginaLogada(),
+        getPageSessao:  () => (pageAgendador && !pageAgendador.isClosed()) ? pageAgendador : _paginaLogada(),
         comprasAlvoPath: path.join(__dirname, 'compras-alvo.json'),
         bus,
         // Só coordena scraping x polling DENTRO da aba do agendador (lote rodando).
